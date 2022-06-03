@@ -2343,15 +2343,6 @@ export function createChecker(program: Program): Checker {
     return props;
   }
 
-  function* walkPropertiesInherited(model: ModelType) {
-    let current: ModelType | undefined = model;
-
-    while (current) {
-      yield* current.properties.values();
-      current = current.baseModel;
-    }
-  }
-
   function countPropertiesInherited(
     model: ModelType,
     filter?: (property: ModelTypeProperty) => boolean
@@ -4369,4 +4360,13 @@ function createTypeMapper(parameters: TemplateParameterType[], args: Type[]): Ty
       return map.get(type) ?? type;
     },
   };
+}
+
+export function* walkPropertiesInherited(model: ModelType) {
+  let current: ModelType | undefined = model;
+
+  while (current) {
+    yield* current.properties.values();
+    current = current.baseModel;
+  }
 }
