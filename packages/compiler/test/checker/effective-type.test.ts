@@ -202,6 +202,36 @@ describe("compiler: effective type", () => {
     expectIdenticalTypes(effective, Base);
   });
 
+  it("extend and filter two levels", async () => {
+    testHost.addCadlFile(
+      "main.cadl",
+      `
+      import "./remove.js";
+
+      @test model Base {
+        prop: string;
+      }
+
+      @test model Middle extends Base {
+        @remove prop2: string;
+      }
+
+      @test model Derived extends Middle {
+        @remove test: string;
+      }
+      `
+    );
+    const { Base, Derived } = await testHost.compile("./");
+    strictEqual(Base.kind, "Model" as const);
+    strictEqual(Derived.kind, "Model" as const);
+
+    const propType = Derived.properties.get("test")?.type;
+    strictEqual(propType?.kind, "Model" as const);
+
+    const effective = testHost.program.checker.getEffectiveModelType(Derived, removeFilter);
+    expectIdenticalTypes(effective, Base);
+  });
+
   it("extend, intersect, and filter", async () => {
     testHost.addCadlFile(
       "main.cadl",
