@@ -24,6 +24,7 @@ import {
   getSummary,
   getVisibility,
   ignoreDiagnostics,
+  isArrayModelType,
   isErrorType,
   isIntrinsic,
   isNeverType,
@@ -826,9 +827,13 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
       //         duplicated schemas.
       switch (type.kind) {
         case "Model":
-          finish(type.baseModel);
-          for (const prop of type.properties.values()) {
-            finish(prop.type);
+          if (isArrayModelType(program, type)) {
+            finish(type.indexer.value);
+          } else {
+            finish(type.baseModel);
+            for (const prop of type.properties.values()) {
+              finish(prop.type);
+            }
           }
           break;
         case "Union":
