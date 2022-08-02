@@ -1,20 +1,25 @@
 import {
   compilerAssert,
   createDiagnosticCollector,
+  createModelTransformer,
+  createQueue,
   DecoratorContext,
   Diagnostic,
   DiagnosticCollector,
   getServiceNamespace,
+  getVisibility,
   InterfaceType,
   isArrayModelType,
   isIntrinsic,
   isTemplateDeclaration,
   isTemplateDeclarationOrInstance,
   isVisible as isVisibleCore,
+  ModelTransformer,
   ModelTypeProperty,
   NamespaceType,
   OperationType,
   Program,
+  PropertyChanger,
   Type,
   validateDecoratorTarget,
   walkPropertiesInherited,
@@ -58,18 +63,20 @@ export interface AutoRouteOptions {
 
 export interface RouteOptions {
   autoRouteOptions?: AutoRouteOptions;
+  autoVisibility?: boolean;
 }
 
 export interface HttpOperationParameter {
-  type: "query" | "path" | "header";
+  kind: "query" | "path" | "header";
   name: string;
-  param: ModelTypeProperty;
+  property: ModelTypeProperty;
+  type: Type;
 }
 
 export interface HttpOperationParameters {
   parameters: HttpOperationParameter[];
-  bodyType?: Type;
   bodyParameter?: ModelTypeProperty;
+  bodyType?: Type;
 }
 
 export interface OperationDetails {
@@ -97,9 +104,6 @@ export enum Visibility {
   Update = 1 << 2,
   Delete = 1 << 3,
   Query = 1 << 4,
-
-  All = Read | Create | Update | Delete | Query,
-
   /**
    * Additional flag to indicate when something is nested in a collection
    * and therefore no metadata is applicable.
@@ -141,7 +145,6 @@ function visibilityToArray(visibility: Visibility): readonly string[] {
 
 export function getVisibilitySuffix(visibility: Visibility) {
   let suffix = "";
-
   if ((visibility & ~Visibility.Item) !== Visibility.Read) {
     const visibilities = visibilityToArray(visibility);
     suffix += visibilities.map((v) => v[0].toUpperCase() + v.slice(1)).join("Or");
@@ -152,6 +155,11 @@ export function getVisibilitySuffix(visibility: Visibility) {
   }
 
   return suffix;
+}
+
+export function isReadonlyProperty(program: Program, property: ModelTypeProperty) {
+  const vis = getVisibility(program, property);
+  return vis && vis.length === 1 && vis[0] === "read";
 }
 
 /**
@@ -309,9 +317,58 @@ export function getRequestVisibility(verb: HttpVerb): Visibility {
   }
 }
 
+const effectiveTypeTransformerKey = Symbol("effectiveTypeTransformer");
+function getEffectiveTypeTransformer(program: Program, visibility: Visibility): ModelTransformer {
+  const autoVisibility = autoVisiblityEnabled(program);
+  let map: Map<Visibility, ModelTransformer> = program
+    .stateMap(effectiveTypeTransformerKey)
+    .get(getServiceNamespace(program));
+
+  if (!map) {
+    map = new Map();
+    program
+      .stateMap(effectiveTypeTransformerKey)
+      .set(program.checker.getGlobalNamespaceType(), map);
+  }
+
+  let transformer = map.get(visibility);
+  if (!transformer) {
+    transformer = createModelTransformer(program, {
+      suffix: getVisibilitySuffix(visibility),
+      itemSuffix: "Item",
+      transform: getTransform(visibility),
+      itemTransform: getTransform(visibility | Visibility.Item),
+    });
+  }
+
+  map.set(visibility, transformer);
+  return transformer;
+
+  function getTransform(visibility: Visibility) {
+    return (property: ModelTypeProperty, change: PropertyChanger) => {
+      if (
+        isApplicableMetadataOrBody(program, property, visibility) ||
+        (autoVisibility && !isVisible(program, property, visibility))
+      ) {
+        change.delete();
+      }
+    };
+  }
+}
+
+/**
+ *
+ */
+export function getEffectiveType<T extends Type>(
+  program: Program,
+  type: T,
+  visibility: Visibility
+): T {
+  return getEffectiveTypeTransformer(program, visibility).transform(type);
+}
+
 export function gatherMetadata(
   program: Program,
-  diagnostics: DiagnosticCollector,
   type: Type,
   visibility: Visibility
 ): Set<ModelTypeProperty> {
@@ -325,10 +382,10 @@ export function gatherMetadata(
 
   const visited = new Set();
   const metadata = new Map<string, ModelTypeProperty>();
-  const queue = [type];
+  const queue = createQueue([type]);
 
-  while (queue.length > 0) {
-    const model = queue.shift()!; // REVIEW: This is probably not an efficient way to queue.
+  while (!queue.isEmpty()) {
+    const model = queue.dequeue();
     visited.add(model);
 
     for (const property of walkPropertiesInherited(model)) {
@@ -345,12 +402,12 @@ export function gatherMetadata(
       // I propose making it an error, but that currently breaks some
       // samples and tests.
       //
-      // The traversal here is level order so that the preferred metadata in
-      // the case of duplicates (ultimately for error recovery when
+      // The traversal here is breadth first so that the preferred metadata
+      // in the case of duplicates (ultimately for error recovery when
       // diagnostic is added) is the least deep, which seems least
       // surprising and most compatible with prior behavior.
       if (metadata.has(property.name)) {
-        // TODO: diagnostics.add(...)
+        // TODO: Diagnostic
         continue;
       }
 
@@ -364,15 +421,13 @@ export function gatherMetadata(
         !isArrayModelType(program, property.type) &&
         !visited.has(property.type)
       ) {
-        queue.push(property.type);
+        queue.enqueue(property.type);
       }
     }
   }
 
   return new Set(metadata.values());
 }
-
-// REVIEW: Move these helpers out of route.ts
 
 export function isMetadata(program: Program, property: ModelTypeProperty) {
   return (
@@ -439,17 +494,17 @@ export function getOperationParameters(
 ): [HttpOperationParameters, readonly Diagnostic[]] {
   const diagnostics = createDiagnosticCollector();
   const visibility = getRequestVisibility(verb);
-  const metadata = gatherMetadata(program, diagnostics, operation.parameters, visibility);
+  const metadata = gatherMetadata(program, operation.parameters, visibility);
 
   const result: HttpOperationParameters = {
     parameters: [],
   };
 
-  for (const param of metadata) {
-    const queryParam = getQueryParamName(program, param);
-    const pathParam = getPathParamName(program, param);
-    const headerParam = getHeaderFieldName(program, param);
-    const bodyParam = isBody(program, param);
+  for (const property of metadata) {
+    const queryParam = getQueryParamName(program, property);
+    const pathParam = getPathParamName(program, property);
+    const headerParam = getHeaderFieldName(program, property);
+    const bodyParam = isBody(program, property);
 
     const defined = [
       ["query", queryParam],
@@ -461,43 +516,40 @@ export function getOperationParameters(
       diagnostics.add(
         createDiagnostic({
           code: "operation-param-duplicate-type",
-          format: { paramName: param.name, types: defined.map((x) => x[0]).join(", ") },
-          target: param, // REVIEW: bad location for nested metadata, should elaborate the context that pulled it in to an operation.
+          format: { paramName: property.name, types: defined.map((x) => x[0]).join(", ") },
+          target: property, // REVIEW: bad location for nested metadata, should elaborate the context that pulled it in to an operation.
         })
       );
     }
 
+    const type = getEffectiveType(program, property.type, visibility);
     if (queryParam) {
-      result.parameters.push({ type: "query", name: queryParam, param });
+      result.parameters.push({ kind: "query", name: queryParam, property: property, type });
     } else if (pathParam) {
-      if (param.optional && param.default === undefined) {
+      if (property.optional && property.default === undefined) {
         reportDiagnostic(program, {
           code: "optional-path-param",
-          format: { paramName: param.name },
+          format: { paramName: property.name },
           target: operation,
         });
       }
-      result.parameters.push({ type: "path", name: pathParam, param });
+      result.parameters.push({ kind: "path", name: pathParam, property: property, type });
     } else if (headerParam) {
-      result.parameters.push({ type: "header", name: headerParam, param });
+      result.parameters.push({ kind: "header", name: headerParam, property: property, type });
     } else if (bodyParam) {
       if (result.bodyType === undefined) {
-        result.bodyParameter = param;
-        result.bodyType = param.type;
+        result.bodyParameter = property;
+        result.bodyType = type;
       } else {
-        diagnostics.add(createDiagnostic({ code: "duplicate-body", target: param }));
+        diagnostics.add(createDiagnostic({ code: "duplicate-body", target: property }));
       }
     }
   }
 
-  const unannotatedParameters = program.checker.filterModelProperties(
-    operation.parameters,
-    (p) => !isApplicableMetadataOrBody(program, p, visibility)
-  );
-
-  if (unannotatedParameters.properties.size > 0) {
+  const unnanotatedParameters = getEffectiveType(program, operation.parameters, visibility);
+  if (unnanotatedParameters.properties.size > 0) {
     if (result.bodyType === undefined) {
-      result.bodyType = unannotatedParameters;
+      result.bodyType = unnanotatedParameters;
     } else {
       diagnostics.add(
         createDiagnostic({
@@ -521,7 +573,7 @@ function generatePathFromParameters(
 ) {
   const filteredParameters: HttpOperationParameter[] = [];
   for (const httpParam of parameters.parameters) {
-    const { type, param } = httpParam;
+    const { kind: type, property: param } = httpParam;
     if (type === "path") {
       addSegmentFragment(program, param, pathFragments);
 
@@ -579,8 +631,8 @@ function getPathForOperation(
     // Pull out path parameters to verify what's in the path string
     const paramByName = new Map(
       parameters.parameters
-        .filter(({ type }) => type === "path")
-        .map(({ param }) => [param.name, param])
+        .filter(({ kind: type }) => type === "path")
+        .map(({ property: param }) => [param.name, param])
     );
 
     // Find path parameter names used in all route fragments
@@ -847,4 +899,16 @@ export function isAutoRoute(
   }
 
   return false;
+}
+
+const autoVisibilityKey = Symbol("autoVisibility");
+export function $autoVisibility(context: DecoratorContext, entity: Type) {
+  if (!validateDecoratorTarget(context, entity, "@autoVisibility", "Namespace")) {
+    return;
+  }
+  context.program.stateSet(autoVisibilityKey).add(entity);
+}
+
+export function autoVisiblityEnabled(program: Program) {
+  return program.stateSet(autoVisibilityKey).has(getServiceNamespace(program));
 }

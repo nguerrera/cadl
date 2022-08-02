@@ -7,6 +7,7 @@ import {
   isArrayModelType,
   isErrorModel,
   isIntrinsic,
+  isRecordModelType,
   isVoidType,
   ModelType,
   ModelTypeProperty,
@@ -24,7 +25,7 @@ import {
   isHeader,
   isStatusCode,
 } from "./decorators.js";
-import { gatherMetadata, isApplicableMetadata, Visibility } from "./route.js";
+import { gatherMetadata, getEffectiveType, isApplicableMetadata, Visibility } from "./route.js";
 
 export type StatusCode = `${number}` | "*";
 export interface HttpOperationResponse {
@@ -35,8 +36,13 @@ export interface HttpOperationResponse {
 }
 
 export interface HttpOperationResponseContent {
-  headers?: Record<string, ModelTypeProperty>;
+  headers: Map<string, HttpResponseHeader>;
   body?: HttpOperationBody;
+}
+
+export interface HttpResponseHeader {
+  property: ModelTypeProperty;
+  type: Type;
 }
 
 export interface HttpOperationBody {
@@ -79,7 +85,8 @@ function processResponseType(
   responses: Record<string, HttpOperationResponse>,
   responseType: Type
 ) {
-  const metadata = gatherMetadata(program, diagnostics, responseType, Visibility.Read);
+  const metadata = gatherMetadata(program, responseType, Visibility.Read);
+  responseType = getEffectiveType(program, responseType, Visibility.Read);
 
   // Get explicity defined status codes
   const statusCodes: Array<string> = getResponseStatusCodes(program, responseType, metadata);
@@ -236,12 +243,15 @@ export function getContentTypes(property: ModelTypeProperty): [string[], readonl
 function getResponseHeaders(
   program: Program,
   metadata: Set<ModelTypeProperty>
-): Record<string, ModelTypeProperty> {
-  const responseHeaders: Record<string, ModelTypeProperty> = {};
-  for (const prop of metadata) {
-    const headerName = getHeaderFieldName(program, prop);
-    if (isHeader(program, prop) && headerName !== "content-type") {
-      responseHeaders[headerName] = prop;
+): Map<string, HttpResponseHeader> {
+  const responseHeaders: Map<string, HttpResponseHeader> = new Map();
+  for (const property of metadata) {
+    const headerName = getHeaderFieldName(program, property);
+    if (isHeader(program, property) && headerName !== "content-type") {
+      responseHeaders.set(headerName, {
+        property,
+        type: getEffectiveType(program, property.type, Visibility.Read),
+      });
     }
   }
   return responseHeaders;
@@ -253,11 +263,12 @@ function getResponseBody(
   responseType: Type,
   metadata: Set<ModelTypeProperty>
 ): Type | undefined {
-  // non-model or intrinsic/array model -> response body is response type
+  // non-model or intrinsic/array/record model -> response body is response type
   if (
     responseType.kind !== "Model" ||
     isIntrinsic(program, responseType) ||
-    isArrayModelType(program, responseType)
+    isArrayModelType(program, responseType) ||
+    isRecordModelType(program, responseType)
   ) {
     return responseType;
   }

@@ -18,6 +18,7 @@ import {
   NamespaceType,
   NeverType,
   OperationType,
+  RecordModelType,
   Type,
   UnknownType,
   VoidType,
@@ -170,15 +171,15 @@ export function isUnknownType(type: Type): type is UnknownType {
  * @param type Model type
  */
 export function isArrayModelType(program: Program, type: ModelType): type is ArrayModelType {
-  return Boolean(type.indexer && getIntrinsicModelName(program, type.indexer.key) === "integer");
+  return !!type.indexer && getIntrinsicModelName(program, type.indexer.key) === "integer";
 }
 
 /**
- * Check if a model is an array type.
+ * Check if a model is an record type.
  * @param type Model type
  */
-export function isRecordModelType(program: Program, type: ModelType): type is ArrayModelType {
-  return Boolean(type.indexer && getIntrinsicModelName(program, type.indexer.key) === "string");
+export function isRecordModelType(program: Program, type: ModelType): type is RecordModelType {
+  return !!type.indexer && getIntrinsicModelName(program, type.indexer.key) === "string";
 }
 
 const numericTypesKey = Symbol("numeric");
@@ -408,7 +409,6 @@ export function $visibility(context: DecoratorContext, target: Type, ...visibili
 export function getVisibility(program: Program, target: Type): string[] | undefined {
   return program.stateMap(visibilitySettingsKey).get(target);
 }
-
 
 export function $withVisibility(
   context: DecoratorContext,

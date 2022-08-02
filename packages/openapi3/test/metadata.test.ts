@@ -121,7 +121,7 @@ describe("openapi3: metadata", () => {
                     items: {
                       $ref: "#/components/schemas/PetItem",
                     },
-                    "x-cadl-name": "Pet[]",
+                    "x-cadl-name": "PetItem[]",
                   },
                 },
               },

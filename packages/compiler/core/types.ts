@@ -158,6 +158,12 @@ export type IntrinsicModel<T extends IntrinsicModelName = IntrinsicModelName> = 
   name: T;
 };
 
+export enum Indexer {
+  None,
+  String,
+  Integer,
+}
+
 export type NeverIndexer = { key: NeverType; value: undefined };
 export type ModelKeyIndexer = {
   key: ModelType;

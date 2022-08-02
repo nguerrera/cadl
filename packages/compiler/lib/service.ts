@@ -87,7 +87,7 @@ export function getServiceVersion(program: Program): string {
   return serviceDetails.version || "0000-00-00";
 }
 
-export function getServiceNamespace(program: Program): NamespaceType | undefined {
+export function getServiceNamespace(program: Program): NamespaceType {
   const serviceDetails = getServiceDetails(program);
   return serviceDetails.namespace ?? program.checker.getGlobalNamespaceType();
 }

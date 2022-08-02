@@ -1,11 +1,20 @@
-import { isArrayModelType, isIntrinsic } from "../lib/decorators.js";
+import { isIntrinsic } from "../lib/decorators.js";
 import { compilerAssert } from "./diagnostics.js";
 import { Program } from "./program.js";
+import { isTemplateInstance } from "./type-utils.js";
 import { ModelType, ModelTypeProperty, Type } from "./types.js";
 
 export interface ModelTransformer {
-  transform<T extends Type>(type: T): T;
-  transform<T extends Type>(type: T | undefined): T | undefined;
+  transform<T extends Type>(type: T, inItem?: boolean): T;
+  transform<T extends Type>(type: T | undefined, inItem?: boolean): T | undefined;
+}
+
+export interface ModelTransformerOptions {
+  suffix?: string;
+  itemSuffix?: string;
+  excludeType?: (type: Type) => void;
+  transform: (property: ModelTypeProperty, change: PropertyChanger) => void;
+  itemTransform?: (property: ModelTypeProperty, change: PropertyChanger) => void;
 }
 
 export interface PropertyChanger {
@@ -14,40 +23,54 @@ export interface PropertyChanger {
   changeType(newType: Type): void;
 }
 
-export type PropertyTransformer = (property: ModelTypeProperty, change: PropertyChanger) => void;
-
 export function createModelTransformer(
   program: Program,
-  suffix: string,
-  transformProperty: (property: ModelTypeProperty, change: PropertyChanger) => void
+  options: ModelTransformerOptions
 ): ModelTransformer {
+  const inItemTransformer = options.itemTransform
+    ? createModelTransformer(program, {
+        suffix: (options.suffix ?? "") + options.itemSuffix,
+        transform: options.itemTransform,
+      })
+    : undefined;
+
   const transformed = new Map<Type, Type>();
+  const unfinished = new WeakSet<Type>();
   return { transform };
 
-  function transform<T extends Type>(type: T): T;
-  function transform<T extends Type>(type: T | undefined): T | undefined;
-  function transform<T extends Type>(type: T | undefined): T | undefined {
+  function transform<T extends Type>(type: T, inItem?: boolean): T;
+  function transform<T extends Type>(type: T | undefined, inItem?: boolean): T | undefined;
+  function transform<T extends Type>(type: T | undefined, inItem = false): T | undefined {
     if (!type) {
       return undefined;
     }
-
-    if (!isTransformable(type)) {
+    if (!type || !isTransformable(type)) {
       return type;
     }
+    if (inItem && inItemTransformer) {
+      return inItemTransformer.transform(type);
+    }
 
-    const newType = transformed.get(type) ?? transformCore(type);
-    postTransform(newType);
+    let newType = transformed.get(type);
+    if (!newType) {
+      if (options.excludeType?.(type)) {
+        newType = type;
+      } else {
+        newType = transformCore(type);
+        newType = finishType(newType);
+      }
+      transformed.set(type, newType);
+    }
 
     compilerAssert(
       newType.kind === type.kind,
       "It should not be possible to change Type kind in transformation."
     );
-
     return newType as T;
   }
 
   function isTransformable(type: Type) {
-    return type.kind === "Model" && !isIntrinsic(program, type) && !isArrayModelType(program, type);
+    return type.kind === "Model" && !isIntrinsic(program, type); //&& !isArrayModelType(program, type);
   }
 
   function transformCore(type: Type): Type {
@@ -63,34 +86,45 @@ export function createModelTransformer(
     transformed.set(type, newType);
   }
 
-  function finishTransform<T extends Type>(type: T, newType: T): T {
-    const finished = program.checker.finishType(type);
-    transformed.set(type, newType);
-    postTransform(finished);
+  function createType<T extends Type>(type: T): T {
+    const newType = program.checker.createType(type);
+    unfinished.add(newType);
     return newType;
   }
 
-  function postTransform(type: Type): void {
-    switch (type.kind) {
-      case "Model":
-        postTransformModel(type);
-        break;
+  function finishType(newType: Type): Type {
+    if (unfinished.has(newType)) {
+      unfinished.delete(newType);
+      return program.checker.finishType(newType);
     }
+    return newType;
   }
 
   function transformModel(model: ModelType): ModelType {
     const newProperties = new Map<string, ModelTypeProperty>();
-    const newModel = program.checker.createType({
+    let newModel: ModelType = createType({
       ...model,
+      name: "",
       derivedModels: [],
       decorators: [...model.decorators],
       baseModel: transform(model.baseModel),
-      name: model.name ? model.name + suffix : "",
       properties: newProperties,
     });
     let changedModel = newModel.baseModel !== model.baseModel;
 
     startTransform(model, newModel);
+
+    if (model.indexer?.value) {
+      newModel.indexer = {
+        ...model.indexer,
+        value: transform(model.indexer.value, true),
+      };
+      changedModel ||= newModel.indexer.value !== model.indexer.value;
+    }
+
+    if (isTemplateInstance(model)) {
+      model.templateArguments = model.templateArguments.map((t) => transform(t));
+    }
 
     for (const property of model.properties.values()) {
       let deleted = false;
@@ -122,7 +156,7 @@ export function createModelTransformer(
         },
       };
 
-      transformProperty(property, changer);
+      options.transform(property, changer);
       if (deleted) {
         continue;
       }
@@ -134,12 +168,19 @@ export function createModelTransformer(
       newProperties.set(property.name, newProperty);
     }
 
-    return finishTransform(model, changedModel ? model : newModel);
-  }
-
-  function postTransformModel(model: ModelType) {
-    for (const each of model.derivedModels) {
-      transform(each);
+    if (!changedModel) {
+      return model;
     }
+
+    for (const derivedModel of model.derivedModels) {
+      transform(derivedModel);
+    }
+    newModel = program.checker.getEffectiveModelType(newModel);
+
+    if (model.name && !isTemplateInstance(model) && !newModel.name) {
+      newModel.name = model.name + options.suffix;
+    }
+
+    return newModel;
   }
 }

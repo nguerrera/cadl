@@ -214,3 +214,51 @@ class CaseInsensitiveMap<T> extends Map<string, T> {
     return super.delete(key.toUpperCase());
   }
 }
+
+export interface Queue<T> {
+  isEmpty(): boolean;
+  enqueue(...items: T[]): void;
+  dequeue(): T;
+}
+
+// borrowed from https://github.com/microsoft/TypeScript/blob/8493ea16aa7fd774dd29d971e09f1477557cccfe/src/compiler/core.ts#L1495-L1534
+export function createQueue<T>(items?: readonly T[]): Queue<T> {
+  const elements: (T | undefined)[] = items?.slice() || [];
+  let headIndex = 0;
+
+  function isEmpty() {
+    return headIndex === elements.length;
+  }
+
+  function enqueue(...items: T[]) {
+    elements.push(...items);
+  }
+
+  function dequeue(): T {
+    if (isEmpty()) {
+      throw new Error("Queue is empty");
+    }
+
+    const result = elements[headIndex] as T;
+    elements[headIndex] = undefined; // Don't keep referencing dequeued item
+    headIndex++;
+
+    // If more than half of the queue is empty, copy the remaining elements to the
+    // front and shrink the array (unless we'd be saving fewer than 100 slots)
+    if (headIndex > 100 && headIndex > elements.length >> 1) {
+      const newLength = elements.length - headIndex;
+      elements.copyWithin(/*target*/ 0, /*start*/ headIndex);
+
+      elements.length = newLength;
+      headIndex = 0;
+    }
+
+    return result;
+  }
+
+  return {
+    enqueue,
+    dequeue,
+    isEmpty,
+  };
+}

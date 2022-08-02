@@ -2807,7 +2807,9 @@ export function createChecker(program: Program): Checker {
   }
 
   function finishType<T extends Type>(typeDef: T, mapper?: TypeMapper): T {
-    (typeDef as any).templateArguments = mapper?.args;
+    if (mapper) {
+      (typeDef as any).templateArguments = mapper?.args;
+    }
 
     if ("decorators" in typeDef) {
       for (const decApp of typeDef.decorators) {
@@ -4114,11 +4116,9 @@ export function createChecker(program: Program): Checker {
       return model;
     }
 
-    // We would need to change the algorithm if this doesn't hold. We
-    // assume model has no inherited properties below.
-    compilerAssert(!model.baseModel, "Anonymous model with base model.");
+    const propertyCount = countPropertiesInherited(model, filter);
 
-    if (model.properties.size === 0) {
+    if (propertyCount === 0) {
       // empty model
       return model;
     }
@@ -4126,7 +4126,7 @@ export function createChecker(program: Program): Checker {
     // Find the candidate set of named model types that could have been the
     // source of every property in the model.
     let candidates: Set<ModelType> | undefined;
-    for (const property of model.properties.values()) {
+    for (const property of walkPropertiesInherited(model)) {
       const sources = getNamedSourceModels(property);
       if (!sources) {
         // unsourced property: no possible match
@@ -4165,15 +4165,11 @@ export function createChecker(program: Program): Checker {
     // to meet this test.
     let match: ModelType | undefined;
     for (const candidate of candidates ?? []) {
-      if (model.properties.size === countPropertiesInherited(candidate)) {
+      if (propertyCount === countPropertiesInherited(candidate)) {
         match = candidate;
         break; // exact match
       }
-      if (
-        filter &&
-        !match &&
-        model.properties.size === countPropertiesInherited(candidate, filter)
-      ) {
+      if (filter && !match && propertyCount === countPropertiesInherited(candidate, filter)) {
         match = candidate;
         continue; // match with filter: keep searching for exact match
       }
