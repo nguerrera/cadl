@@ -442,6 +442,15 @@ function filterModelPropertiesInPlace(
   }
 }
 
+const computedKey = Symbol("computed");
+export function $computed(context: DecoratorContext, target: Type) {
+  context.program.stateSet(computedKey).add(target);
+}
+
+export function isComputed(program: Program, type: Type) {
+  return program.stateSet(computedKey).has(type);
+}
+
 // -- @withOptionalProperties decorator ---------------------
 
 export function $withOptionalProperties(context: DecoratorContext, target: Type) {

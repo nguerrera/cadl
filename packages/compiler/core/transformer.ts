@@ -1,4 +1,4 @@
-import { isIntrinsic } from "../lib/decorators.js";
+import { $computed, isIntrinsic } from "../lib/decorators.js";
 import { compilerAssert } from "./diagnostics.js";
 import { Program } from "./program.js";
 import { isTemplateInstance } from "./type-utils.js";
@@ -106,7 +106,7 @@ export function createModelTransformer(
       ...model,
       name: "",
       derivedModels: [],
-      decorators: [...model.decorators],
+      decorators: [...model.decorators, { decorator: $computed, args: [] }],
       baseModel: transform(model.baseModel),
       properties: newProperties,
     });
@@ -129,6 +129,7 @@ export function createModelTransformer(
     for (const property of model.properties.values()) {
       let deleted = false;
       const changes: Partial<ModelTypeProperty> = {
+        decorators: [...property.decorators, { decorator: $computed, args: [] }],
         model: newModel,
         type: property.type,
       };

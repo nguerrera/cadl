@@ -63,6 +63,7 @@ export interface Program {
   enableProjections(projections: ProjectionApplication[], startNode?: Type): Projector;
   disableProjections(): void;
   currentProjector?: Projector;
+  registerStateView(underlyingType: Type, view: Type): void;
 }
 
 interface EmitterRef {
@@ -242,6 +243,7 @@ export async function createProgram(
     set currentProjector(v) {
       currentProjector = v;
     },
+    registerStateView,
   };
 
   let virtualFileCount = 0;
@@ -777,6 +779,11 @@ export async function createProgram(
   function disableProjections() {
     currentProjector = undefined;
   }
+
+  function registerStateView(underlyingType: Type, view: Type) {
+
+  }
+    
 
   function reportDiagnostic(diagnostic: Diagnostic): void {
     if (shouldSuppress(diagnostic)) {
