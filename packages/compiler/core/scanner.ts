@@ -982,16 +982,18 @@ export function skipWhiteSpace(input: string, position: number): number {
   return position;
 }
 
-function skipSingleLineComment(input: string, position: number): number {
-  position += 2; // consume '//'
-
+export function skipToEndOfLine(input: string, position: number): number {
   for (; position < input.length; position++) {
     if (isLineBreak(input.charCodeAt(position))) {
       break;
     }
   }
-
   return position;
+}
+
+function skipSingleLineComment(input: string, position: number): number {
+  position += 2; // consume '//'
+  return skipToEndOfLine(input, position);
 }
 
 function skipMultiLineComment(

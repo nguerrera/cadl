@@ -69,6 +69,7 @@ import {
   createScanner,
   isKeyword,
   isPunctuation,
+  skipToEndOfLine,
   skipTrivia,
   skipWhiteSpace,
   Token,
@@ -498,28 +499,32 @@ export function createServer(host: ServerHost): Server {
         addRange(comment.pos, comment.end);
       }
     }
+
     visitChildren(ast, addRangesForNode);
+    return ranges;
+
     function addRangesForNode(node: Node) {
-      let nodeStart = node.pos;
+      let collapsedText: string | undefined = undefined;
       if ("decorators" in node && node.decorators.length > 0) {
-        const decoratorEnd = node.decorators[node.decorators.length - 1].end;
-        addRange(nodeStart, decoratorEnd);
-        nodeStart = skipTrivia(file.text, decoratorEnd);
+        const decoratorEnd = skipTrivia(file.text, node.decorators[node.decorators.length - 1].end);
+        const textEnd = skipToEndOfLine(file.text, decoratorEnd);
+        collapsedText = file.text.substring(decoratorEnd, textEnd);
       }
 
-      addRange(nodeStart, node.end);
+      addRange(node.pos, node.end, collapsedText);
       visitChildren(node, addRangesForNode);
     }
-    return ranges;
-    function addRange(startPos: number, endPos: number) {
+
+    function addRange(startPos: number, endPos: number, collapsedText?: string) {
       const start = file.getLineAndCharacterOfPosition(startPos);
       const end = file.getLineAndCharacterOfPosition(endPos);
       if (start.line !== end.line) {
         ranges.push({
           startLine: start.line,
-          startCharacter: start.character,
+          startCharacter: 0,
           endLine: end.line,
           endCharacter: end.character,
+          collapsedText,
         });
       }
     }

@@ -99,8 +99,8 @@ specifiers:
   vite: ^2.9.9
   vsce: ~2.6.7
   vscode-languageclient: ~8.0.0
-  vscode-languageserver: ~7.0.0
-  vscode-languageserver-textdocument: ~1.0.1
+  vscode-languageserver: ~8.0.2
+  vscode-languageserver-textdocument: ~1.0.7
   vscode-oniguruma: ~1.6.1
   vscode-textmate: ~6.0.0
   watch: ~1.0.2
@@ -205,8 +205,8 @@ dependencies:
   vite: 2.9.14
   vsce: 2.6.7
   vscode-languageclient: 8.0.2
-  vscode-languageserver: 7.0.0
-  vscode-languageserver-textdocument: 1.0.5
+  vscode-languageserver: 8.0.2
+  vscode-languageserver-textdocument: 1.0.7
   vscode-oniguruma: 1.6.2
   vscode-textmate: 6.0.0
   watch: 1.0.2
@@ -6390,11 +6390,6 @@ packages:
       yazl: 2.5.1
     dev: false
 
-  /vscode-jsonrpc/6.0.0:
-    resolution: {integrity: sha512-wnJA4BnEjOSyFMvjZdpiOwhSq9uDoK8e/kpRJDTaMYzwlkrhG1fwDIZI94CLsLzlCK5cIbMMtFlJlfR57Lavmg==}
-    engines: {node: '>=8.0.0 || >=10.0.0'}
-    dev: false
-
   /vscode-jsonrpc/8.0.2:
     resolution: {integrity: sha512-RY7HwI/ydoC1Wwg4gJ3y6LpU9FJRZAUnTYMXthqhFXXu77ErDd/xkREpGuk4MyYkk4a+XDWAMqe0S3KkelYQEQ==}
     engines: {node: '>=14.0.0'}
@@ -6409,13 +6404,6 @@ packages:
       vscode-languageserver-protocol: 3.17.2
     dev: false
 
-  /vscode-languageserver-protocol/3.16.0:
-    resolution: {integrity: sha512-sdeUoAawceQdgIfTI+sdcwkiK2KU+2cbEYA0agzM2uqaUy2UpnnGHtWTHVEtS0ES4zHU0eMFRGN+oQgDxlD66A==}
-    dependencies:
-      vscode-jsonrpc: 6.0.0
-      vscode-languageserver-types: 3.16.0
-    dev: false
-
   /vscode-languageserver-protocol/3.17.2:
     resolution: {integrity: sha512-8kYisQ3z/SQ2kyjlNeQxbkkTNmVFoQCqkmGrzLH6A9ecPlgTbp3wDTnUNqaUxYr4vlAcloxx8zwy7G5WdguYNg==}
     dependencies:
@@ -6423,23 +6411,19 @@ packages:
       vscode-languageserver-types: 3.17.2
     dev: false
 
-  /vscode-languageserver-textdocument/1.0.5:
-    resolution: {integrity: sha512-1ah7zyQjKBudnMiHbZmxz5bYNM9KKZYz+5VQLj+yr8l+9w3g+WAhCkUkWbhMEdC5u0ub4Ndiye/fDyS8ghIKQg==}
-    dev: false
-
-  /vscode-languageserver-types/3.16.0:
-    resolution: {integrity: sha512-k8luDIWJWyenLc5ToFQQMaSrqCHiLwyKPHKPQZ5zz21vM+vIVUSvsRpcbiECH4WR88K2XZqc4ScRcZ7nk/jbeA==}
+  /vscode-languageserver-textdocument/1.0.7:
+    resolution: {integrity: sha512-bFJH7UQxlXT8kKeyiyu41r22jCZXG8kuuVVA33OEJn1diWOZK5n8zBSPZFHVBOu8kXZ6h0LIRhf5UnCo61J4Hg==}
     dev: false
 
   /vscode-languageserver-types/3.17.2:
     resolution: {integrity: sha512-zHhCWatviizPIq9B7Vh9uvrH6x3sK8itC84HkamnBWoDFJtzBf7SWlpLCZUit72b3os45h6RWQNC9xHRDF8dRA==}
     dev: false
 
-  /vscode-languageserver/7.0.0:
-    resolution: {integrity: sha512-60HTx5ID+fLRcgdHfmz0LDZAXYEV68fzwG0JWwEPBode9NuMYTIxuYXPg4ngO8i8+Ou0lM7y6GzaYWbiDL0drw==}
+  /vscode-languageserver/8.0.2:
+    resolution: {integrity: sha512-bpEt2ggPxKzsAOZlXmCJ50bV7VrxwCS5BI4+egUmure/oI/t4OlFzi/YNtVvY24A2UDOZAgwFGgnZPwqSJubkA==}
     hasBin: true
     dependencies:
-      vscode-languageserver-protocol: 3.16.0
+      vscode-languageserver-protocol: 3.17.2
     dev: false
 
   /vscode-oniguruma/1.6.2:
@@ -6816,7 +6800,7 @@ packages:
     dev: false
 
   file:projects/compiler.tgz:
-    resolution: {integrity: sha512-k3jadUC1fkg9M16GM25MvBf09/ItLT9epfHglCK7UdqrywoasG2dNtvPqPKu7JqnIQvhx2qmjwIN4NodG3/rIg==, tarball: file:projects/compiler.tgz}
+    resolution: {integrity: sha512-EpxN/czWs/R3a4sdw/gOZCJXqFdkQEffsTQdwWPlh2RY4rqrJmoUlbl8P+SedvgHW8cGQlaxP+odVH0GvPA2rQ==, tarball: file:projects/compiler.tgz}
     name: '@rush-temp/compiler'
     version: 0.0.0
     dependencies:
@@ -6851,8 +6835,8 @@ packages:
       rimraf: 3.0.2
       source-map-support: 0.5.21
       typescript: 4.7.4
-      vscode-languageserver: 7.0.0
-      vscode-languageserver-textdocument: 1.0.5
+      vscode-languageserver: 8.0.2
+      vscode-languageserver-textdocument: 1.0.7
       vscode-oniguruma: 1.6.2
       vscode-textmate: 6.0.0
       yargs: 17.3.1
@@ -7005,7 +6989,7 @@ packages:
     dev: false
 
   file:projects/playground.tgz:
-    resolution: {integrity: sha512-WsIDdd0RDYjWo/OSZPZX+1M6HRAiLA/AeS2Wbo4i+ZVTOn+W2Op/hchAhaVVNMHwDcFj889wB6q+xT4o+PsoJQ==, tarball: file:projects/playground.tgz}
+    resolution: {integrity: sha512-owgPPbuvcBlJAYqmVw7IkTh86a67HQLBJx4L3B5VuVhQYDAlbfyTYHQVLfW878zDtbv03iNGpPnm5IacE4s0xw==, tarball: file:projects/playground.tgz}
     name: '@rush-temp/playground'
     version: 0.0.0
     dependencies:
@@ -7037,8 +7021,8 @@ packages:
       swagger-ui: 4.14.0
       typescript: 4.7.4
       vite: 2.9.14
-      vscode-languageserver: 7.0.0
-      vscode-languageserver-textdocument: 1.0.5
+      vscode-languageserver: 8.0.2
+      vscode-languageserver-textdocument: 1.0.7
     transitivePeerDependencies:
       - encoding
       - less
