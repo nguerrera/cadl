@@ -1,7 +1,7 @@
 import {
   EnumType,
   InterfaceType,
-  ModelType,
+  Model,
   NamespaceType,
   OperationType,
   TupleType,
@@ -16,7 +16,7 @@ export enum UsageFlags {
   Output = 1 << 2,
 }
 
-export type TrackableType = ModelType | EnumType | UnionType | TupleType;
+export type TrackableType = Model | EnumType | UnionType | TupleType;
 
 export interface UsageTracker {
   readonly types: readonly TrackableType[];

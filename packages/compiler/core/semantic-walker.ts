@@ -88,7 +88,7 @@ function navigateModelType(
   }
   eventEmitter.emit("model", model);
   for (const property of model.properties.values()) {
-    navigateModelTypeProperty(property, eventEmitter, visited);
+    navigateModelProperty(property, eventEmitter, visited);
   }
   if (model.baseModel) {
     navigateModelType(model.baseModel, eventEmitter, visited);
@@ -99,7 +99,7 @@ function navigateModelType(
   eventEmitter.emit("exitModel", model);
 }
 
-function navigateModelTypeProperty(
+function navigateModelProperty(
   property: ModelProperty,
   eventEmitter: EventEmitter<SemanticNodeListener>,
   visited: Set<any>
@@ -198,7 +198,7 @@ function navigateType(
     case "Model":
       return navigateModelType(type, eventEmitter, visited);
     case "ModelProperty":
-      return navigateModelTypeProperty(type, eventEmitter, visited);
+      return navigateModelProperty(type, eventEmitter, visited);
     case "Namespace":
       return navigateNamespaceType(type, eventEmitter, visited);
     case "Interface":

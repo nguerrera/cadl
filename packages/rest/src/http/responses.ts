@@ -158,7 +158,7 @@ function processResponseType(
 function getResponseStatusCodes(
   program: Program,
   responseType: Type,
-  metadata: Set<ModelTypeProperty>
+  metadata: Set<ModelProperty>
 ): string[] {
   const codes: string[] = [];
 
@@ -169,7 +169,7 @@ function getResponseStatusCodes(
   }
 
   if (responseType.kind === "Model") {
-    for (let t: ModelType | undefined = responseType; t; t = t.baseModel) {
+    for (let t: Model | undefined = responseType; t; t = t.baseModel) {
       codes.push(...getStatusCodes(program, t));
     }
   }
@@ -185,7 +185,7 @@ function getResponseStatusCodes(
 function getResponseContentTypes(
   program: Program,
   diagnostics: DiagnosticCollector,
-  metadata: Set<ModelTypeProperty>
+  metadata: Set<ModelProperty>
 ): string[] {
   const contentTypes: string[] = [];
   for (const prop of metadata) {
@@ -233,9 +233,11 @@ export function getContentTypes(property: ModelProperty): [string[], readonly Di
 /**
  * Get response headers from response metadata
  */
-function getResponseHeaders(program: Program, responseModel: Type): Record<string, ModelProperty> {
-  responseModel: Type
-  const responseHeaders: Record<string, ModelTypeProperty> = {};
+function getResponseHeaders(
+  program: Program,
+  metadata: Set<ModelProperty>
+): Record<string, ModelProperty> {
+  const responseHeaders: Record<string, ModelProperty> = {};
   for (const prop of metadata) {
     const headerName = getHeaderFieldName(program, prop);
     if (isHeader(program, prop) && headerName !== "content-type") {
@@ -249,7 +251,7 @@ function getResponseBody(
   program: Program,
   diagnostics: DiagnosticCollector,
   responseType: Type,
-  metadata: Set<ModelTypeProperty>
+  metadata: Set<ModelProperty>
 ): Type | undefined {
   // non-model or intrinsic/array model -> response body is response type
   if (
@@ -261,7 +263,7 @@ function getResponseBody(
   }
 
   // look for explicit body
-    const getAllBodyProps = (m: ModelType): ModelTypeProperty[] => {
+  let bodyProperty: ModelProperty | undefined;
   for (const property of metadata) {
     if (isBody(program, property)) {
       if (bodyProperty) {

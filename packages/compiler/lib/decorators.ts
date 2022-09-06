@@ -439,7 +439,7 @@ export function $withVisibility(
 
 export function isVisible(
   program: Program,
-  property: ModelTypeProperty,
+  property: ModelProperty,
   visibilities: readonly string[]
 ) {
   const propertyVisibilities = getVisibility(program, property);
@@ -447,8 +447,8 @@ export function isVisible(
 }
 
 function filterModelPropertiesInPlace(
-  model: ModelType,
-  filter: (prop: ModelTypeProperty) => boolean
+  model: Model,
+  filter: (prop: ModelProperty) => boolean
 ) {
   for (const [key, prop] of model.properties) {
     if (!filter(prop)) {

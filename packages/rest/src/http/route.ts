@@ -7,6 +7,8 @@ import {
   filterModelProperties,
   getServiceNamespace,
   Interface,
+  isArrayModelType,
+  isGlobalNamespace,
   isIntrinsic,
   isTemplateDeclaration,
   isTemplateDeclarationOrInstance,
@@ -291,7 +293,7 @@ export function gatherMetadata(
   diagnostics: DiagnosticCollector,
   type: Type,
   visibility: Visibility
-): Set<ModelTypeProperty> {
+): Set<ModelProperty> {
   if (type.kind !== "Model") {
     return new Set();
   }
@@ -301,7 +303,7 @@ export function gatherMetadata(
   }
 
   const visited = new Set();
-  const metadata = new Map<string, ModelTypeProperty>();
+  const metadata = new Map<string, ModelProperty>();
   const queue = [type];
 
   while (queue.length > 0) {
@@ -351,7 +353,7 @@ export function gatherMetadata(
 
 // REVIEW: Move these helpers out of route.ts
 
-export function isMetadata(program: Program, property: ModelTypeProperty) {
+export function isMetadata(program: Program, property: ModelProperty) {
   return (
     isHeader(program, property) ||
     isQueryParam(program, property) ||
@@ -360,13 +362,13 @@ export function isMetadata(program: Program, property: ModelTypeProperty) {
   );
 }
 
-export function isVisible(program: Program, property: ModelTypeProperty, visibility: Visibility) {
+export function isVisible(program: Program, property: ModelProperty, visibility: Visibility) {
   return isVisibleCore(program, property, visibilityToArray(visibility));
 }
 
 export function isApplicableMetadata(
   program: Program,
-  property: ModelTypeProperty,
+  property: ModelProperty,
   visibility: Visibility
 ) {
   return isApplicableMetadataCore(program, property, visibility, false);
@@ -374,7 +376,7 @@ export function isApplicableMetadata(
 
 export function isApplicableMetadataOrBody(
   program: Program,
-  property: ModelTypeProperty,
+  property: ModelProperty,
   visibility: Visibility
 ) {
   return isApplicableMetadataCore(program, property, visibility, true);
@@ -382,7 +384,7 @@ export function isApplicableMetadataOrBody(
 
 function isApplicableMetadataCore(
   program: Program,
-  property: ModelTypeProperty,
+  property: ModelProperty,
   visibility: Visibility,
   treatBodyAsMetadata: boolean
 ) {
@@ -466,7 +468,8 @@ export function getOperationParameters(
     }
   }
 
-  const unannotatedParameters = program.checker.filterModelProperties(
+  const unannotatedParameters = filterModelProperties(
+    program,
     operation.parameters,
     (p) => !isApplicableMetadataOrBody(program, p, visibility)
   );
@@ -600,13 +603,7 @@ function getVerbForOperation(program: Program, operation: Operation): HttpVerb |
     // TODO: Enable this verb choice to be customized!
     (getAction(program, operation) || getCollectionAction(program, operation) ? "post" : undefined);
 
-  if (verb !== undefined) {
     return verb;
-  }
-
-  // If no verb was found by this point, choose a verb based on whether there is
-  // a body type for the request
-  return parameters.bodyType ? "post" : "get";
 }
 
 function buildRoutes(
@@ -651,20 +648,10 @@ function buildRoutes(
 
     const responses = diagnostics.pipe(getResponsesForOperation(program, op));
 
-    if (!verb && route.parameters.bodyType) {
-      diagnostics.add(
-        createDiagnostic({
-          code: "http-verb-missing-with-body",
-          format: { operationName: op.name },
-          target: op,
-        })
-      );
-    }
-
     operations.push({
       path: route.path,
       pathFragment: route.pathFragment,
-      verb: verb ?? "get",
+      verb: verb ?? (route.parameters.bodyType ? "post" : "get"),
       container,
       parameters: route.parameters,
       operation: op,
