@@ -19,7 +19,7 @@ Cadl consists of the following language features:
 - [Type Literals](#Type-Literals): strings and numbers with specific values
 - [Type Operators](#Type-Operators): syntax for composing model types into other types
 - [Operations](#Operations): service endpoints with parameters and return values
-- [Namespaces & Usings](#Namespaces-&-Usings): groups models and operations together into hierarchical groups with friendly names
+- [Namespaces & Usings](#namespaces--usings): groups models and operations together into hierarchical groups with friendly names
 - [Interfaces](#Interfaces): groups operations
 - [Imports](#Imports): links declarations across multiple files and libraries together into a single program
 - [Decorators](#Decorators): bits of TypeScript code that add metadata or sometimes mutate declarations
@@ -39,12 +39,11 @@ model Dog {
   favoriteToy?: string;
   bestTreat?: string = "chicken";
 }
-
 ```
 
 #### Built-in Models
 
-[Type relations](./type-relations.md)
+[Type relations](../packages/website/src/docs/language-basics/type-relations.md)
 
 Cadl comes with built-in models for common data types:
 
@@ -67,7 +66,10 @@ Cadl comes with built-in models for common data types:
 - `duration`: A duration/time period. e.g 5s, 10h
 - `boolean`: true or false
 - `null`: the null value found in e.g. JSON.
-- `Map<K, V>`: a map from K to V.
+- `Record<T>`: a dictionary with string K and value T.
+- `unknown`: A top type in Cadl that all types can be assigned to.
+- `void`: A function return type indicating the function doesn't return a value.
+- `never`: The never type indicates the values that will never occur. Typically, you use the never type to represent the return type of a function that always throws an error.
 
 #### Spread
 
@@ -92,7 +94,6 @@ model Dog {
   species: string;
   name: string;
 }
-
 ```
 
 #### Extends
@@ -105,7 +106,6 @@ model Animal {
 }
 
 model Dog extends Animal {}
-
 ```
 
 #### Is
@@ -125,7 +125,6 @@ model StringThing is Thing<string>;
 model StringThing {
   property: string;
 }
-
 ```
 
 ### Enums
@@ -138,7 +137,6 @@ enum Color {
   Blue,
   Green,
 }
-
 ```
 
 In this case, we haven't specified how the constants will be represented, allowing for different choices in different scenarios. For example, the OpenAPI emitter will choose string values "Red", "Green", "Blue". Another protocol might prefer to assign incrementing numeric values 0, 1, 2.
@@ -156,7 +154,6 @@ enum Priority {
   High: 100,
   Low: 0,
 }
-
 ```
 
 #### Templates
@@ -172,7 +169,6 @@ model Page<T> {
 model DogPage {
   ...Page<Dog>;
 }
-
 ```
 
 A template parameter can be given a default value with `= <value>`.
@@ -182,7 +178,6 @@ model Page<T = string> {
   size: number;
   item: T[];
 }
-
 ```
 
 #### Type Aliases
@@ -191,7 +186,6 @@ Sometimes it's convenient to alias a model template instantiation or type produc
 
 ```cadl
 alias DogPage = Page<Dog>;
-
 ```
 
 Unlike `model`, `alias` does not create a new entity, and as such will not change generated code in any way. An alias merely describes a source code shorthand to avoid repeating the right-hand side in multiple places.
@@ -208,7 +202,6 @@ model BestDog {
   age: 14;
   best: true;
 }
-
 ```
 
 String literal types can also be created using the triple-quote syntax which enables multi-line strings:
@@ -221,7 +214,6 @@ model Dog {
     And so on
     """;
 }
-
 ```
 
 ### Type Operators
@@ -234,7 +226,6 @@ Unions describe a type that must be exactly one of the union's constituents. Cre
 
 ```cadl
 alias GoodBreed = Beagle | GermanShepherd | GoldenRetriever;
-
 ```
 
 ##### Named unions
@@ -247,7 +238,6 @@ union GoodBreed {
   shepherd: GermanShepherd,
   retriever: GoldenRetriever,
 }
-
 ```
 
 The above example is equivalent to the `GoodBreed` alias above, except that emitters can actually see `GoodBreed` as a named entity and also see the `beagle`, `shepherd`, and `retriever` names for the options. It also becomes possible to apply [decorators](#Decorators) to each of the options when using this form.
@@ -258,7 +248,6 @@ Intersections describe a type that must include all the intersection's constitue
 
 ```cadl
 alias Dog = Animal & Pet;
-
 ```
 
 #### Arrays
@@ -267,7 +256,6 @@ Arrays describe lists of things. Create an Array type with the `[]` operator.
 
 ```cadl
 alias Pack = Dog[];
-
 ```
 
 ### Operations
@@ -276,14 +264,12 @@ Operations describe service endpoints and consist of an operation name, paramete
 
 ```cadl
 op getDog(name: string): Dog;
-
 ```
 
 The operation's parameters describe a model, so anything you can do in a model you can do in a parameter list as well, including using the spread operator:
 
 ```cadl
 op getDog(...commonParams, name: string): Dog;
-
 ```
 
 Often an endpoint returns one of any number of models. For example, there might be a return type for when an item is found, and a return type for when an item isn't found. Unions are used to describe this pattern:
@@ -294,7 +280,6 @@ model DogNotFound {
 }
 
 op getDog(name: string): Dog | DogNotFound;
-
 ```
 
 ### Namespaces & Usings
@@ -307,7 +292,6 @@ namespace Models {
 }
 
 op getDog(): Models.Dog;
-
 ```
 
 You can also put an entire Cadl file into a namespace by using the blockless namespace syntax:
@@ -316,14 +300,12 @@ You can also put an entire Cadl file into a namespace by using the blockless nam
 // models.cadl
 namespace Models;
 model Dog {}
-
 ```
 
 ```cadl
 // main.cadl
 import "./models.cadl";
 op getDog(): Models.Dog;
-
 ```
 
 Namespace declarations can declare multiple namespaces at once by using a dotted member expression. There's no need to declare nested namespace blocks if you don't want to.
@@ -338,7 +320,6 @@ namespace C.D.E {
 }
 
 alias M = A.B.C.D.E.M;
-
 ```
 
 It can be convenient to add references to a namespace's declarations to your local namespace, especially when namespaces can become deeply nested. The `using` statement lets us do this:
@@ -347,7 +328,6 @@ It can be convenient to add references to a namespace's declarations to your loc
 // models.cadl
 namespace Service.Models;
 model Dog {}
-
 ```
 
 ```cadl
@@ -355,7 +335,6 @@ model Dog {}
 import "./models.cadl";
 using ServiceModels;
 op getDog(): Dog; // here we can use Dog directly.
-
 ```
 
 The bindings introduced by a `using` statement are local to the namespace they are declared in. They do not become part of the namespace themselves.
@@ -372,7 +351,6 @@ namespace Test2 {
 
 alias C = Test2.A; // not ok
 alias C = Test2.B; // ok
-
 ```
 
 ### Interfaces
@@ -387,7 +365,6 @@ interface A {
 interface B {
   b(): string;
 }
-
 ```
 
 And the keyword `extends` can be used to compose operations from other interfaces into a new interface:
@@ -403,7 +380,6 @@ interface C {
   b(): string;
   c(): string;
 }
-
 ```
 
 ### Imports
@@ -416,20 +392,17 @@ The path you import must either begin with "./" or "../" or otherwise be an abso
 // main.cadl
 import "./models";
 op getDog(): Dog;
-
 ```
 
 ```cadl
 // models/main.cadl
 import "./dog.cadl";
-
 ```
 
 ```cadl
 // models/dog.cadl
 namespace Models;
 model Dog {}
-
 ```
 
 ### Decorators
@@ -460,7 +433,6 @@ model Dog {
   @logType("Name type")
   name: string;
 }
-
 ```
 
 After running this Cadl program, the following will be printed to the console:
@@ -474,17 +446,71 @@ Dog type: Model
 
 Cadl comes built-in with a number of decorators that are useful for defining service APIs regardless of what protocol or language you're targeting.
 
-- @summary - attach a documentation string, typically a short, single-line description.
-- @doc - attach a documentation string. Works great with multi-line string literals.
-- @key - mark a model property as the key to identify instances of that type
-- @tag - attach a simple tag to a declaration
-- @secret - mark a string as a secret value that should be treated carefully to avoid exposure
-- @minValue/@maxValue - set the min and max values of number types
+- [@deprecated](#deprecated) - indicates that the decorator target has been deprecated.
+- [@doc](#doc) - attach a documentation string. Works great with multi-line string literals.
+- [@error](#error) - specify a model is representing an error
+- [@format](#format) - specify the data format hint for a string type
+- [@friendlyName](#friendlyname) - specify a friendly name to be used instead of declared model name
+- @indexer
+- [@inspectType/@inspectTypeName](#inspecttype) - displays information about a type during compilation
+- [@key](#key) - mark a model property as the key to identify instances of that type
+- [@knownValues](#knownvalues) - mark a string type with an enum that contains all known values
+- @list -
 - @minLength/@maxLength - set the min and max lengths for strings
-- @knownValues - mark a string type with an enum that contains all known values
-- @pattern - set the pattern for a string using regular expression syntax
-- @format - specify the data format hint for a string type
-- @error - specify a model is representing an error
+- @minValue/@maxValue - set the min and max values of number types
+- [@pattern](#pattern) - set the pattern for a string using regular expression syntax
+- [@secret](#secret) - mark a string as a secret value that should be treated carefully to avoid exposure
+- [@summary](#summary) - attach a documentation string, typically a short, single-line description.
+- [@tag](#tag) - attach a simple tag to a declaration
+- [@visibility/@withVisibility](#visibility-decorators)
+- [@withDefaultKeyVisibility](#withefaultkeyvisibility) - set the visibility of key properties in a model if not already set.
+- [@withOptionalProperties](#withoptionalproperties) - makes all properties of the target type optional.
+- [@withoutDefaultValues](#withoutdefaultvalues) - removes all read-only properties from the target type.
+- [@withoutOmittedProperties](#withoutomittedproperties) - removes all model properties that match a type.
+- [@withUpdateableProperties](#withupdateableproperties) - remove all read-only properties from the target type
+
+##### @inspectType
+
+Syntax:
+
+```
+@inspectType(message)
+@inspectTypeName(message)
+```
+
+`@inspectType` displays information about a type during compilation.
+`@inspectTypeName` displays information and name of type during compilation.
+They can be specified on any language element -- a model, an operation, a namespace, etc.
+
+##### @deprecated
+
+Syntax:
+
+```
+@deprecated(message)
+```
+
+`@deprecated` marks a type as deprecated. It can be specified on any language element -- a model, an operation, a namespace, etc.
+
+##### @friendlyName
+
+Syntax:
+
+```
+@friendlyName(string)
+```
+
+`@friendlyName` specifies an alternate model name to be used instead of declared model name. It can be specified on a model.
+
+##### @pattern
+
+Syntax:
+
+```
+@pattern(regularExpressionText)
+```
+
+`@pattern` specifies a regular expression on a string property.
 
 ##### @summary
 
@@ -561,6 +587,24 @@ Otherwise, the name of the target property will be used.
 
 `@key` can only be applied to model properties.
 
+##### @secret
+
+Syntax:
+
+```
+@secret
+```
+
+`@secret` mark a string as a secret value that should be treated carefully to avoid exposure
+
+```
+@secret
+model Password is string;
+
+```
+
+`@secret` can only be applied to string model;
+
 ##### @format
 
 Syntax:
@@ -622,8 +666,69 @@ model ReadDog {
 model WriteDog {
   ...Dog;
 }
+```
+
+#### @withDefaultKeyVisibility
+
+Syntax:
 
 ```
+@withDefaultKeyVisibility(string)
+```
+
+`@withDefaultKeyVisibility` - set the visibility of key properties in a model if not already set. The first argument accepts a string representing the desired default
+visibility value.
+If a key property already has a `visibility` decorator then the default visibility is not applied.
+
+`@withDefaultKeyVisibility` can only be applied to model types.
+
+#### @withOptionalProperties
+
+Syntax:
+
+```
+@withOptionalProperties()
+```
+
+`@withOptionalProperties` makes all properties of the target type optional.
+
+`@withOptionalProperties` can only be applied to model types.
+
+#### @withoutDefaultValues
+
+Syntax:
+
+```
+@withoutDefaultValues()
+```
+
+`@withoutDefaultValues` removes all read-only properties from the target type.
+
+`@withoutDefaultValues` can only be applied to model types.
+
+#### @withoutOmittedProperties
+
+Syntax:
+
+```
+@withoutOmittedProperties(type)
+```
+
+`@withoutOmittedProperties` removes all model properties that match a type.
+
+`@withoutOmittedProperties` can only be applied to model types.
+
+#### @withUpdateableProperties
+
+Syntax:
+
+```
+@withUpdateableProperties()
+```
+
+`@withUpdateableProperties` remove all read-only properties from the target type.
+
+`@withUpdateableProperties` can only be applied to model types.
 
 ### Libraries
 
@@ -645,7 +750,6 @@ Lastly, you need to import the libraries into your Cadl program. By convention, 
 // in main.cadl
 import "@cadl-lang/rest";
 import "@cadl-lang/openapi3";
-
 ```
 
 #### Using emitter libraries
@@ -733,7 +837,6 @@ Here's an example that uses these to define a Pet Store service:
 @Cadl.Rest.produces("application/json", "image/png")
 @Cadl.Rest.consumes("application/json")
 namespace PetStore;
-
 ```
 
 The `server` keyword can take a third parameter with parameters as necessary:
@@ -756,7 +859,6 @@ using Cadl.Http;
 namespace Pets {
 
 }
-
 ```
 
 To define an operation on this resource, you need to provide the HTTP verb for the route using the `@get`, `@head` `@post`, `@put`, `@patch`, or `@delete` decorators. Alternatively, you can name your operation `list`, `create`, `read`, `update`, `delete`, or `deleteAll` and the appropriate verb will be used automatically. Lets add an operation to our `Pets` resource:
@@ -769,7 +871,6 @@ namespace Pets {
   // or you could also use
   @get op listPets(): Pet[];
 }
-
 ```
 
 ##### Automatic route generation
@@ -822,7 +923,6 @@ namespace Pets {
   op list(@query skip: int32, @query top: int32): Pet[];
   op read(@path petId: int32): Pet;
 }
-
 ```
 
 Path parameters are appended to the URL unless a substitution with that parameter name exists on the resource path. For example, we might define a sub-resource using the following Cadl. Note how the path parameter for our sub-resource's list operation corresponds to the substitution in the URL.
@@ -832,7 +932,6 @@ Path parameters are appended to the URL unless a substitution with that paramete
 namespace PetToys {
   op list(@path petId: int32): Toy[];
 }
-
 ```
 
 #### Request & response bodies
@@ -851,7 +950,6 @@ namespace Pets {
   @post
   op create(@body pet: Pet): {};
 }
-
 ```
 
 Note that in the absence of explicit `@body`:
@@ -869,7 +967,6 @@ namespace Pets {
   @post
   op create(...Pet): {};
 }
-
 ```
 
 #### Polymorphism with discriminators
@@ -898,7 +995,6 @@ model Dog extends Pet {
   kind: "dog";
   bark: string;
 }
-
 ```
 
 #### Headers
@@ -918,7 +1014,6 @@ namespace Pets {
   @post
   op create(@body pet: Pet): {};
 }
-
 ```
 
 #### Status codes
@@ -943,7 +1038,6 @@ namespace Pets {
     @statusCode statusCode: 204;
   };
 }
-
 ```
 
 #### Built-in response shapes
@@ -967,7 +1061,6 @@ namespace Pets {
   @post
   op create(...Pet): NoContentResponse;
 }
-
 ```
 
 Note that the default status code is 200 for non-empty bodies and 204 for empty bodies. Similarly, explicit `Body<T>` is not required when T is known to be a model. So the following terser form is equivalent:
@@ -980,7 +1073,6 @@ namespace Pets {
   @post
   op create(...Pet): {};
 }
-
 ```
 
 Finally, another common style is to make helper response types that are
@@ -1014,7 +1106,6 @@ namespace Pets {
   @post
   op create(...Pet): CreateResponse;
 }
-
 ```
 
 ### CADL Config

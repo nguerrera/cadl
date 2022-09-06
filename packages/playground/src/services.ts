@@ -99,6 +99,30 @@ export async function attachServices(host: BrowserHost) {
     };
   }
 
+  function monacoDocumentHighlight(
+    highlight: lsp.DocumentHighlight
+  ): monaco.languages.DocumentHighlight {
+    return {
+      range: monacoRange(highlight.range),
+      kind: highlight.kind,
+    };
+  }
+
+  function monacoHoverContents(contents: lsp.MarkupContent): monaco.IMarkdownString[] {
+    return [{ value: contents.value }];
+  }
+
+  function monacoHover(hover: lsp.Hover): monaco.languages.Hover {
+    if (Array.isArray(hover.contents) || lsp.MarkedString.is(hover.contents)) {
+      throw new Error("MarkedString (deprecated) not supported.");
+    }
+
+    return {
+      contents: monacoHoverContents(hover.contents),
+      range: hover.range ? monacoRange(hover.range) : undefined,
+    };
+  }
+
   function monacoRange(range: lsp.Range): monaco.IRange {
     return {
       startColumn: range.start.character + 1,
@@ -172,6 +196,20 @@ export async function attachServices(host: BrowserHost) {
       const ranges = await serverLib.getFoldingRanges(lspDocumentArgs(model));
       const output = ranges.map(monacoFoldingRange);
       return output;
+    },
+  });
+
+  monaco.languages.registerHoverProvider("cadl", {
+    async provideHover(model, position) {
+      const hover = await serverLib.getHover(lspArgs(model, position));
+      return monacoHover(hover);
+    },
+  });
+
+  monaco.languages.registerDocumentHighlightProvider("cadl", {
+    async provideDocumentHighlights(model, position) {
+      const highlights = await serverLib.findDocumentHighlight(lspArgs(model, position));
+      return highlights.map(monacoDocumentHighlight);
     },
   });
 

@@ -2,16 +2,25 @@ import { strictEqual, throws } from "assert";
 import prettier from "prettier";
 import * as plugin from "../../formatter/index.js";
 
-function format(code: string): string {
+type TestParser = "cadl" | "markdown";
+function format(code: string, parser: TestParser = "cadl"): string {
   const output = prettier.format(code, {
-    parser: "cadl",
+    parser,
     plugins: [plugin],
   });
   return output;
 }
 
-function assertFormat({ code, expected }: { code: string; expected: string }) {
-  const result = format(code);
+function assertFormat({
+  code,
+  expected,
+  parser,
+}: {
+  code: string;
+  expected: string;
+  parser?: TestParser;
+}) {
+  const result = format(code, parser ?? "cadl");
   strictEqual(result.trim(), expected.trim());
 }
 
@@ -457,12 +466,12 @@ interface Foo {
       assertFormat({
         code: `
 @foo
-// comment
+   // comment
 namespace Bar;
 `,
         expected: `
-// comment
 @foo
+// comment
 namespace Bar;
 `,
       });
@@ -472,31 +481,103 @@ namespace Bar;
       assertFormat({
         code: `
 @foo
-// comment
+  // comment
 model Bar {}
 `,
         expected: `
-// comment
 @foo
+// comment
 model Bar {}
 `,
       });
     });
 
-    it("format comment between decorator and model property", () => {
+    it("keeps comment in between decorators", () => {
+      assertFormat({
+        code: `
+@foo
+  // comment
+  @bar
+model Bar {}
+`,
+        expected: `
+@foo
+// comment
+@bar
+model Bar {}
+`,
+      });
+    });
+
+    it("keeps comment at the end of line of a decorators", () => {
+      assertFormat({
+        code: `
+@foo          // comment
+  @bar
+model Bar {}
+`,
+        expected: `
+@foo // comment
+@bar
+model Bar {}
+`,
+      });
+    });
+
+    it("comment preceeding decorators hug decorators", () => {
+      assertFormat({
+        code: `
+        // comment
+@foo          
+  @bar
+model Bar {}
+`,
+        expected: `
+// comment
+@foo
+@bar
+model Bar {}
+`,
+      });
+    });
+
+    it("keeps comment in between decorators on model property", () => {
       assertFormat({
         code: `
 model Bar {
-  @foo
-// comment
-myProp: string;
+      @foo
+        // comment
+    @bar
+  foo: string;
 }
 `,
         expected: `
 model Bar {
   @foo
   // comment
-  myProp: string;
+  @bar
+  foo: string;
+}
+`,
+      });
+    });
+
+    it("keeps comment in between decorators on enum member", () => {
+      assertFormat({
+        code: `
+enum Bar {
+      @foo
+        // comment
+    @bar
+  foo: "foo",
+}
+`,
+        expected: `
+        enum Bar {
+  @foo
+  // comment
+  @bar
+  foo: "foo",
 }
 `,
       });
@@ -984,6 +1065,30 @@ namespace MyNamespace {
 `,
       });
     });
+
+    it("directive hugs decorators on model property", () => {
+      assertFormat({
+        code: `
+model Foo {
+  prop1: string;
+  #suppress   "some-error"     "because"
+    @decorate("args")
+   @decorate
+   prop2: string;
+  }
+`,
+        expected: `
+model Foo {
+  prop1: string;
+
+  #suppress "some-error" "because"
+  @decorate("args")
+  @decorate
+  prop2: string;
+}
+`,
+      });
+    });
   });
 
   describe("decorators", () => {
@@ -1257,6 +1362,248 @@ model Foo {
 model Foo {
   p: Some.Nested.bar;
 }
+`,
+      });
+    });
+  });
+
+  describe("projections", () => {
+    it("format to and from", () => {
+      assertFormat({
+        code: `
+projection         model#proj 
+  {to{} from {}}
+`,
+        expected: `
+projection model#proj {
+  to {
+
+  }
+  from {
+
+  }
+}
+`,
+      });
+    });
+
+    it("format to and from with args", () => {
+      assertFormat({
+        code: `
+projection         model#proj 
+  {to(   val) {} from(  
+    
+    val) {}}
+`,
+        expected: `
+projection model#proj {
+  to(val) {
+
+  }
+  from(val) {
+
+  }
+}
+`,
+      });
+    });
+
+    it("format function call", () => {
+      assertFormat({
+        code: `
+projection model#proj {
+to {
+   bar(     one, 
+    
+    two)
+}
+`,
+        expected: `
+projection model#proj {
+  to {
+    bar(one, two);
+  }
+}
+`,
+      });
+    });
+
+    describe("format operation expression(s)", () => {
+      ["+", "-", "*", "/", "==", "!=", ">", "<", ">=", "<=", "||", "&&"].forEach((op) => {
+        it(`with ${op}`, () => {
+          assertFormat({
+            code: `
+projection model#proj {
+to {
+    bar( one 
+    
+      ${op} 
+      two)
+}
+}
+    `,
+            expected: `
+projection model#proj {
+  to {
+    bar(one ${op} two);
+  }
+}
+    `,
+          });
+        });
+      });
+
+      [
+        ["1 + 2 * 3", "1 + (2 * 3)"],
+        ["( 1 + 2) * 3", "(1 + 2) * 3"],
+        ["one || two && three", "one || (two && three)"],
+      ].forEach(([input, expected]) => {
+        it(`case ${expected}`, () => {
+          assertFormat({
+            code: `
+projection model#proj {
+to {
+    bar(${input})
+}
+}
+    `,
+            expected: `
+projection model#proj {
+  to {
+    bar(${expected});
+  }
+}
+    `,
+          });
+        });
+      });
+    });
+
+    it("format lambda", () => {
+      assertFormat({
+        code: `
+projection model#proj {
+to {
+  (  a ,  
+    b) => { bar();}
+}
+}
+`,
+        expected: `
+projection model#proj {
+  to {
+    (a, b) => {
+      bar();
+    };
+  }
+}
+`,
+      });
+    });
+
+    describe("if", () => {
+      it("format simple if", () => {
+        assertFormat({
+          code: `
+projection model#proj {
+  to {
+    if foo 
+    
+      {
+              bar();
+    }
+  }
+}
+`,
+          expected: `
+projection model#proj {
+  to {
+    if foo {
+      bar();
+    };
+  }
+}
+`,
+        });
+      });
+
+      it("format with else if", () => {
+        assertFormat({
+          code: `
+projection model#proj {
+  to {
+    if one 
+    
+      {
+              bar();
+    } else 
+    if two { bar()}
+  }
+}
+`,
+          expected: `
+projection model#proj {
+  to {
+    if one {
+      bar();
+    } else if two {
+      bar();
+    };
+  }
+}
+`,
+        });
+      });
+
+      it("format with else", () => {
+        assertFormat({
+          code: `
+projection model#proj {
+  to {
+    if one 
+    
+      {
+              bar();
+    } else 
+     { bar()}
+  }
+}
+`,
+          expected: `
+projection model#proj {
+  to {
+    if one {
+      bar();
+    } else {
+      bar();
+    };
+  }
+}
+`,
+        });
+      });
+    });
+  });
+
+  describe("when embeded", () => {
+    it("doesn't include blank line at the end (in markdown)", () => {
+      assertFormat({
+        parser: "markdown",
+        code: `
+This is markdown
+\`\`\`cadl
+
+op test(): string;
+
+
+\`\`\`
+`,
+        expected: `
+This is markdown
+
+\`\`\`cadl
+op test(): string;
+\`\`\`
 `,
       });
     });

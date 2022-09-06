@@ -3,17 +3,19 @@ import {
   createDecoratorDefinition,
   DecoratorContext,
   DecoratorValidator,
-  ModelType,
-  ModelTypeProperty,
-  NamespaceType,
-  OperationType,
+  Model,
+  ModelProperty,
+  Namespace,
+  Operation,
   Program,
   setCadlNamespace,
   Type,
+  Union,
 } from "@cadl-lang/compiler";
+import { createStateSymbol, reportDiagnostic } from "./lib.js";
 import { getResourceTypeKey } from "./resource.js";
 
-const producesTypesKey = Symbol("producesTypes");
+const producesTypesKey = createStateSymbol("producesTypes");
 
 const producesDecorator = createDecoratorDefinition({
   name: "@produces",
@@ -24,11 +26,7 @@ const producesDecorator = createDecoratorDefinition({
   },
 } as const);
 
-export function $produces(
-  context: DecoratorContext,
-  entity: NamespaceType,
-  ...contentTypes: string[]
-) {
+export function $produces(context: DecoratorContext, entity: Namespace, ...contentTypes: string[]) {
   if (!producesDecorator.validate(context, entity, contentTypes)) {
     return;
   }
@@ -41,7 +39,7 @@ export function getProduces(program: Program, entity: Type): string[] {
   return program.stateMap(producesTypesKey).get(entity) || [];
 }
 
-const consumesTypesKey = Symbol("consumesTypes");
+const consumesTypesKey = createStateSymbol("consumesTypes");
 const consumeDefinition = createDecoratorDefinition({
   name: "@consumes",
   target: "Namespace",
@@ -50,11 +48,7 @@ const consumeDefinition = createDecoratorDefinition({
     kind: "String",
   },
 } as const);
-export function $consumes(
-  context: DecoratorContext,
-  entity: NamespaceType,
-  ...contentTypes: string[]
-) {
+export function $consumes(context: DecoratorContext, entity: Namespace, ...contentTypes: string[]) {
   if (!consumeDefinition.validate(context, entity, contentTypes)) {
     return;
   }
@@ -71,18 +65,87 @@ export interface Discriminator {
   propertyName: string;
 }
 
-const discriminatorKey = Symbol("discriminator");
+const discriminatorKey = createStateSymbol("discriminator");
 
 const discriminatorDecorator = createDecoratorDefinition({
   name: "@discriminator",
-  target: "Model",
+  target: ["Model", "Union"],
   args: [{ kind: "String" }],
 } as const);
 
-export function $discriminator(context: DecoratorContext, entity: ModelType, propertyName: string) {
+export function $discriminator(
+  context: DecoratorContext,
+  entity: Model | Union,
+  propertyName: string
+) {
   if (!discriminatorDecorator.validate(context, entity, [propertyName])) {
     return;
   }
+
+  let hasErrors = false;
+  if (entity.kind === "Union") {
+    // we can validate discriminator up front for unions. Models are validated
+    // in emitters.
+    for (const variant of entity.variants.values()) {
+      if (typeof variant.name === "symbol") {
+        // likely not possible to hit this without applying the decorator programmatically
+        reportDiagnostic(context.program, {
+          code: "invalid-discriminated-union",
+          target: entity,
+        });
+
+        return;
+      }
+
+      if (variant.type.kind !== "Model") {
+        reportDiagnostic(context.program, {
+          code: "invalid-discriminated-union-variant",
+          messageId: "default",
+          format: {
+            name: variant.name,
+          },
+          target: variant,
+        });
+        hasErrors = true;
+        continue;
+      }
+
+      const prop = variant.type.properties.get(propertyName);
+      if (!prop) {
+        reportDiagnostic(context.program, {
+          code: "invalid-discriminated-union-variant",
+          messageId: "noDiscriminant",
+          format: {
+            name: variant.name,
+            discriminant: propertyName,
+          },
+          target: variant,
+        });
+        hasErrors = true;
+        continue;
+      }
+
+      if (
+        prop.type.kind !== "String" &&
+        (prop.type.kind !== "EnumMember" ||
+          (prop.type.value !== undefined && typeof prop.type.value !== "string"))
+      ) {
+        reportDiagnostic(context.program, {
+          code: "invalid-discriminated-union-variant",
+          messageId: "wrongDiscriminantType",
+          format: {
+            name: variant.name,
+            discriminant: propertyName,
+          },
+          target: variant,
+        });
+        hasErrors = true;
+        continue;
+      }
+    }
+  }
+
+  if (hasErrors) return;
 
   context.program.stateMap(discriminatorKey).set(entity, propertyName);
 }
@@ -101,7 +164,7 @@ const segmentDecorator = createDecoratorDefinition({
   args: [{ kind: "String" }],
 } as const);
 
-const segmentsKey = Symbol("segments");
+const segmentsKey = createStateSymbol("segments");
 
 /**
  * `@segment` defines the preceding path segment for a `@path` parameter in auto-generated routes
@@ -113,7 +176,7 @@ const segmentsKey = Symbol("segments");
  */
 export function $segment(
   context: DecoratorContext,
-  entity: ModelType | ModelTypeProperty | OperationType,
+  entity: Model | ModelProperty | Operation,
   name: string
 ) {
   if (!segmentDecorator.validate(context, entity, [name])) {
@@ -123,7 +186,7 @@ export function $segment(
   context.program.stateMap(segmentsKey).set(entity, name);
 }
 
-function getResourceSegment(program: Program, resourceType: ModelType): string | undefined {
+function getResourceSegment(program: Program, resourceType: Model): string | undefined {
   // Add path segment for resource type key (if it has one)
   const resourceKey = getResourceTypeKey(program, resourceType);
   return resourceKey
@@ -137,11 +200,7 @@ const segmentOfDecorator = createDecoratorDefinition({
   args: [{ kind: "Model" }],
 } as const);
 
-export function $segmentOf(
-  context: DecoratorContext,
-  entity: OperationType,
-  resourceType: ModelType
-) {
+export function $segmentOf(context: DecoratorContext, entity: Operation, resourceType: Model) {
   if ((resourceType.kind as any) === "TemplateParameter") {
     // Skip it, this operation is in a templated interface
     return;
@@ -162,7 +221,7 @@ export function getSegment(program: Program, entity: Type): string | undefined {
   return program.stateMap(segmentsKey).get(entity);
 }
 
-const segmentSeparatorsKey = Symbol("segmentSeparators");
+const segmentSeparatorsKey = createStateSymbol("segmentSeparators");
 
 const segmentSeparatorDecorator = createDecoratorDefinition({
   name: "@segmentSeparator",
@@ -181,7 +240,7 @@ const segmentSeparatorDecorator = createDecoratorDefinition({
  */
 export function $segmentSeparator(
   context: DecoratorContext,
-  entity: ModelType | ModelTypeProperty | OperationType,
+  entity: Model | ModelProperty | Operation,
   separator: string
 ) {
   if (!segmentSeparatorDecorator.validate(context, entity, [separator])) {
@@ -195,6 +254,52 @@ export function getSegmentSeparator(program: Program, entity: Type): string | un
   return program.stateMap(segmentSeparatorsKey).get(entity);
 }
 
+const resourceDecorator = createDecoratorDefinition({
+  name: "@resource",
+  target: "Model",
+  args: [{ kind: "String" }],
+} as const);
+
+/**
+ * `@resource` marks a model as a resource type.
+ *
+ * The first argument should be the name of the collection that the resources
+ * belong to.  For example, a resource type `Widget` might have a collection
+ * name of `widgets`.
+ *
+ * `@resource` can only be applied to models.
+ */
+export function $resource(context: DecoratorContext, entity: Model, collectionName: string) {
+  if (!resourceDecorator.validate(context, entity, [collectionName])) {
+    return;
+  }
+
+  // Ensure type has a key property
+  const key = getResourceTypeKey(context.program, entity);
+
+  // A resource type must have a key property
+  if (!key) {
+    reportDiagnostic(context.program, {
+      code: "resource-missing-key",
+      format: {
+        modelName: entity.name,
+      },
+      target: entity,
+    });
+
+    return;
+  }
+
+  // Apply the @segment decorator with the collection name
+  context.call($segment, key.keyProperty, collectionName);
+
+  // Manually push the decorator onto the property so that it's copyable in KeysOf<T>
+  key.keyProperty.decorators.push({
+    decorator: $segment,
+    args: [{ value: collectionName }],
+  });
+}
+
 export type ResourceOperations =
   | "read"
   | "create"
@@ -206,17 +311,17 @@ export type ResourceOperations =
 
 export interface ResourceOperation {
   operation: string;
-  resourceType: ModelType;
+  resourceType: Model;
 }
 
-const resourceOperationsKey = Symbol("resourceOperations");
+const resourceOperationsKey = createStateSymbol("resourceOperations");
 
 interface ResourceOperationValidator extends DecoratorValidator<"Operation", [{ kind: "Model" }]> {}
 
 export function setResourceOperation(
   context: DecoratorContext,
-  entity: OperationType,
-  resourceType: ModelType,
+  entity: Operation,
+  resourceType: Model,
   operation: ResourceOperations,
   decorator: ResourceOperationValidator
 ) {
@@ -237,7 +342,7 @@ export function setResourceOperation(
 
 export function getResourceOperation(
   program: Program,
-  cadlOperation: OperationType
+  cadlOperation: Operation
 ): ResourceOperation | undefined {
   return program.stateMap(resourceOperationsKey).get(cadlOperation);
 }
@@ -248,11 +353,7 @@ const readsResourceDecorator = createDecoratorDefinition({
   args: [{ kind: "Model" }],
 } as const);
 
-export function $readsResource(
-  context: DecoratorContext,
-  entity: OperationType,
-  resourceType: ModelType
-) {
+export function $readsResource(context: DecoratorContext, entity: Operation, resourceType: Model) {
   setResourceOperation(context, entity, resourceType, "read", readsResourceDecorator);
 }
 
@@ -264,8 +365,8 @@ const createsResourceDecorator = createDecoratorDefinition({
 
 export function $createsResource(
   context: DecoratorContext,
-  entity: OperationType,
-  resourceType: ModelType
+  entity: Operation,
+  resourceType: Model
 ) {
   // Add path segment for resource type key
   context.call($segmentOf, entity, resourceType);
@@ -281,8 +382,8 @@ const createsOrReplacesResourceDecorator = createDecoratorDefinition({
 
 export function $createsOrReplacesResource(
   context: DecoratorContext,
-  entity: OperationType,
-  resourceType: ModelType
+  entity: Operation,
+  resourceType: Model
 ) {
   setResourceOperation(
     context,
@@ -301,8 +402,8 @@ const createsOrUpdatesResourceDecorator = createDecoratorDefinition({
 
 export function $createsOrUpdatesResource(
   context: DecoratorContext,
-  entity: OperationType,
-  resourceType: ModelType
+  entity: Operation,
+  resourceType: Model
 ) {
   setResourceOperation(
     context,
@@ -321,8 +422,8 @@ const updatesResourceDecorator = createDecoratorDefinition({
 
 export function $updatesResource(
   context: DecoratorContext,
-  entity: OperationType,
-  resourceType: ModelType
+  entity: Operation,
+  resourceType: Model
 ) {
   setResourceOperation(context, entity, resourceType, "update", updatesResourceDecorator);
 }
@@ -335,8 +436,8 @@ const deletesResourceDecorator = createDecoratorDefinition({
 
 export function $deletesResource(
   context: DecoratorContext,
-  entity: OperationType,
-  resourceType: ModelType
+  entity: Operation,
+  resourceType: Model
 ) {
   setResourceOperation(context, entity, resourceType, "delete", deletesResourceDecorator);
 }
@@ -347,11 +448,7 @@ const listsResourceDecorator = createDecoratorDefinition({
   args: [{ kind: "Model" }],
 } as const);
 
-export function $listsResource(
-  context: DecoratorContext,
-  entity: OperationType,
-  resourceType: ModelType
-) {
+export function $listsResource(context: DecoratorContext, entity: Operation, resourceType: Model) {
   // Add the @list decorator too so that collection routes are generated correctly
   context.call($list, entity, resourceType);
 
@@ -365,7 +462,7 @@ function lowerCaseFirstChar(str: string): string {
   return str[0].toLocaleLowerCase() + str.substring(1);
 }
 
-function makeActionName(op: OperationType, name: string | undefined): string {
+function makeActionName(op: Operation, name: string | undefined): string {
   return lowerCaseFirstChar(name || op.name);
 }
 
@@ -375,8 +472,8 @@ const actionDecorator = createDecoratorDefinition({
   args: [{ kind: "String", optional: true }],
 } as const);
 
-const actionsKey = Symbol("actions");
-export function $action(context: DecoratorContext, entity: OperationType, name?: string) {
+const actionsKey = createStateSymbol("actions");
+export function $action(context: DecoratorContext, entity: Operation, name?: string) {
   if (!actionDecorator.validate(context, entity, [name])) {
     return;
   }
@@ -388,11 +485,11 @@ export function $action(context: DecoratorContext, entity: OperationType, name?:
   context.program.stateMap(actionsKey).set(entity, action);
 }
 
-export function getAction(program: Program, operation: OperationType): string | null | undefined {
+export function getAction(program: Program, operation: Operation): string | null | undefined {
   return program.stateMap(actionsKey).get(operation);
 }
 
-const collectionActionsKey = Symbol("collectionActions");
+const collectionActionsKey = createStateSymbol("collectionActions");
 
 const collectionActionDecorator = createDecoratorDefinition({
   name: "@collectionAction",
@@ -402,8 +499,8 @@ const collectionActionDecorator = createDecoratorDefinition({
 
 export function $collectionAction(
   context: DecoratorContext,
-  entity: OperationType,
-  resourceType: ModelType,
+  entity: Operation,
+  resourceType: Model,
   name?: string
 ) {
   if ((resourceType as Type).kind === "TemplateParameter") {
@@ -429,12 +526,12 @@ export function $collectionAction(
 
 export function getCollectionAction(
   program: Program,
-  operation: OperationType
+  operation: Operation
 ): string | null | undefined {
   return program.stateMap(collectionActionsKey).get(operation);
 }
 
-const resourceLocationsKey = Symbol("resourceLocations");
+const resourceLocationsKey = createStateSymbol("resourceLocations");
 
 const resourceLocationDecorator = createDecoratorDefinition({
   name: "@resourceLocation",
@@ -444,8 +541,8 @@ const resourceLocationDecorator = createDecoratorDefinition({
 
 export function $resourceLocation(
   context: DecoratorContext,
-  entity: ModelType,
-  resourceType: ModelType
+  entity: Model,
+  resourceType: Model
 ): void {
   if ((resourceType as Type).kind === "TemplateParameter") {
     // Skip it, this operation is in a templated interface
@@ -459,10 +556,7 @@ export function $resourceLocation(
   context.program.stateMap(resourceLocationsKey).set(entity, resourceType);
 }
 
-export function getResourceLocationType(
-  program: Program,
-  entity: ModelType
-): ModelType | undefined {
+export function getResourceLocationType(program: Program, entity: Model): Model | undefined {
   return program.stateMap(resourceLocationsKey).get(entity);
 }
 

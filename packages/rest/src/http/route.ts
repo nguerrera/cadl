@@ -4,22 +4,22 @@ import {
   DecoratorContext,
   Diagnostic,
   DiagnosticCollector,
+  filterModelProperties,
   getServiceNamespace,
-  InterfaceType,
-  isArrayModelType,
+  Interface,
   isIntrinsic,
   isTemplateDeclaration,
   isTemplateDeclarationOrInstance,
   isVisible as isVisibleCore,
-  ModelTypeProperty,
-  NamespaceType,
-  OperationType,
+  ModelProperty,
+  Namespace,
+  Operation,
   Program,
   Type,
   validateDecoratorTarget,
   walkPropertiesInherited,
 } from "@cadl-lang/compiler";
-import { createDiagnostic, reportDiagnostic } from "../diagnostics.js";
+import { createDiagnostic, createStateSymbol, reportDiagnostic } from "../lib.js";
 import {
   getAction,
   getCollectionAction,
@@ -42,7 +42,7 @@ import {
 } from "./decorators.js";
 import { getResponsesForOperation, HttpOperationResponse } from "./responses.js";
 
-export type OperationContainer = NamespaceType | InterfaceType;
+export type OperationContainer = Namespace | Interface;
 
 export interface FilteredRouteParam {
   routeParamString?: string;
@@ -50,10 +50,7 @@ export interface FilteredRouteParam {
 }
 
 export interface AutoRouteOptions {
-  routeParamFilter?: (
-    op: OperationType,
-    param: ModelTypeProperty
-  ) => FilteredRouteParam | undefined;
+  routeParamFilter?: (op: Operation, param: ModelProperty) => FilteredRouteParam | undefined;
 }
 
 export interface RouteOptions {
@@ -63,13 +60,13 @@ export interface RouteOptions {
 export interface HttpOperationParameter {
   type: "query" | "path" | "header";
   name: string;
-  param: ModelTypeProperty;
+  param: ModelProperty;
 }
 
 export interface HttpOperationParameters {
   parameters: HttpOperationParameter[];
   bodyType?: Type;
-  bodyParameter?: ModelTypeProperty;
+  bodyParameter?: ModelProperty;
 }
 
 export interface OperationDetails {
@@ -79,7 +76,7 @@ export interface OperationDetails {
   container: OperationContainer;
   parameters: HttpOperationParameters;
   responses: HttpOperationResponse[];
-  operation: OperationType;
+  operation: Operation;
 }
 
 export interface RoutePath {
@@ -177,10 +174,10 @@ export function $routeReset(context: DecoratorContext, entity: Type, path: strin
   });
 }
 
-const routeOptionsKey = Symbol("routeOptions");
+const routeOptionsKey = createStateSymbol("routeOptions");
 export function setRouteOptionsForNamespace(
   program: Program,
-  namespace: NamespaceType,
+  namespace: Namespace,
   options: RouteOptions
 ) {
   program.stateMap(routeOptionsKey).set(namespace, options);
@@ -188,38 +185,18 @@ export function setRouteOptionsForNamespace(
 
 function getRouteOptionsForNamespace(
   program: Program,
-  namespace: NamespaceType
+  namespace: Namespace
 ): RouteOptions | undefined {
   return program.stateMap(routeOptionsKey).get(namespace);
 }
 
-const routeContainerKey = Symbol("routeContainer");
-function addRouteContainer(program: Program, entity: Type): void {
-  const container = entity.kind === "Operation" ? entity.interface || entity.namespace : entity;
-  if (!container) {
-    // Somehow the entity doesn't have a container.  This should only happen
-    // when a type was created manually and not by the checker.
-    throw new Error(`${entity.kind} is not or does not have a container`);
-  }
-
-  if (container.kind === "Interface" && isTemplateDeclaration(container)) {
-    // Don't register uninstantiated template interfaces
-    return;
-  }
-
-  program.stateSet(routeContainerKey).add(container);
-}
-
-const routesKey = Symbol("routes");
+const routesKey = createStateSymbol("routes");
 function setRoute(context: DecoratorContext, entity: Type, details: RoutePath) {
   if (
     !validateDecoratorTarget(context, entity, "@route", ["Namespace", "Interface", "Operation"])
   ) {
     return;
   }
-
-  // Register the container of the operation as one that holds routed operations
-  addRouteContainer(context.program, entity);
 
   const state = context.program.stateMap(routesKey);
 
@@ -247,7 +224,7 @@ function setRoute(context: DecoratorContext, entity: Type, details: RoutePath) {
 
 export function getRoutePath(
   program: Program,
-  entity: NamespaceType | InterfaceType | OperationType
+  entity: Namespace | Interface | Operation
 ): RoutePath | undefined {
   return program.stateMap(routesKey).get(entity);
 }
@@ -435,7 +412,7 @@ function isApplicableMetadataCore(
 export function getOperationParameters(
   program: Program,
   verb: HttpVerb,
-  operation: OperationType
+  operation: Operation
 ): [HttpOperationParameters, readonly Diagnostic[]] {
   const diagnostics = createDiagnosticCollector();
   const visibility = getRequestVisibility(verb);
@@ -444,7 +421,6 @@ export function getOperationParameters(
   const result: HttpOperationParameters = {
     parameters: [],
   };
-
   for (const param of metadata) {
     const queryParam = getQueryParamName(program, param);
     const pathParam = getPathParamName(program, param);
@@ -514,7 +490,7 @@ export function getOperationParameters(
 
 function generatePathFromParameters(
   program: Program,
-  operation: OperationType,
+  operation: Operation,
   pathFragments: string[],
   parameters: HttpOperationParameters,
   options: RouteOptions
@@ -558,7 +534,7 @@ function generatePathFromParameters(
 function getPathForOperation(
   program: Program,
   diagnostics: DiagnosticCollector,
-  operation: OperationType,
+  operation: Operation,
   routeFragments: string[],
   verb: HttpVerb,
   options: RouteOptions
@@ -617,15 +593,20 @@ function getPathForOperation(
   };
 }
 
-function getVerbForOperation(program: Program, operation: OperationType): HttpVerb | undefined {
-  const resourceOperation = getResourceOperation(program, operation);
+function getVerbForOperation(program: Program, operation: Operation): HttpVerb | undefined {  const resourceOperation = getResourceOperation(program, operation);
   const verb =
     (resourceOperation && resourceOperationToVerb[resourceOperation.operation]) ??
     getOperationVerb(program, operation) ??
     // TODO: Enable this verb choice to be customized!
     (getAction(program, operation) || getCollectionAction(program, operation) ? "post" : undefined);
 
-  return verb;
+  if (verb !== undefined) {
+    return verb;
+  }
+
+  // If no verb was found by this point, choose a verb based on whether there is
+  // a body type for the request
+  return parameters.bodyType ? "post" : "get";
 }
 
 function buildRoutes(
@@ -633,9 +614,13 @@ function buildRoutes(
   diagnostics: DiagnosticCollector,
   container: OperationContainer,
   routeFragments: string[],
-  visitedOperations: Set<OperationType>,
+  visitedOperations: Set<Operation>,
   options: RouteOptions
 ): OperationDetails[] {
+  if (container.kind === "Interface" && isTemplateDeclaration(container)) {
+    // Skip template interface operations
+    return [];
+  }
   // Get the route info for this container, if any
   const baseRoute = getRoutePath(program, container);
   const parentFragments = [...routeFragments, ...(baseRoute ? [baseRoute.path] : [])];
@@ -689,10 +674,14 @@ function buildRoutes(
 
   // Build all child routes and append them to the list, but don't recurse in
   // the global scope because that could pull in unwanted operations
-  if (container.kind === "Namespace" && container.name !== "") {
+  if (container.kind === "Namespace") {
+    // If building routes for the global namespace we shouldn't navigate the sub namespaces.
+    const includeSubNamespaces = isGlobalNamespace(program, container);
+    const additionalInterfaces = getExternalInterfaces(program, container) ?? [];
     const children: OperationContainer[] = [
-      ...container.namespaces.values(),
+      ...(includeSubNamespaces ? [] : container.namespaces.values()),
       ...container.interfaces.values(),
+      ...additionalInterfaces,
     ];
 
     const childRoutes = children.flatMap((child) =>
@@ -707,7 +696,7 @@ function buildRoutes(
 export function getRoutesForContainer(
   program: Program,
   container: OperationContainer,
-  visitedOperations: Set<OperationType>,
+  visitedOperations: Set<Operation>,
   options?: RouteOptions
 ): [OperationDetails[], readonly Diagnostic[]] {
   const routeOptions =
@@ -721,6 +710,45 @@ export function getRoutesForContainer(
   );
 }
 
+const externalInterfaces = createStateSymbol("externalInterfaces");
+/**
+ * @depreacted DO NOT USE. For internal use only as a workaround.
+ * @param program Program
+ * @param target Target namespace
+ * @param interf Interface that should be included in namespace.
+ */
+export function includeInterfaceRoutesInNamespace(
+  program: Program,
+  target: Namespace,
+  sourceInterface: string
+) {
+  let array = program.stateMap(externalInterfaces).get(target);
+  if (array === undefined) {
+    array = [];
+    program.stateMap(externalInterfaces).set(target, array);
+  }
+
+  array.push(sourceInterface);
+}
+
+function getExternalInterfaces(program: Program, namespace: Namespace) {
+  const interfaces: string[] | undefined = program.stateMap(externalInterfaces).get(namespace);
+  if (interfaces === undefined) {
+    return undefined;
+  }
+  return interfaces
+    .map((interfaceFQN: string) => {
+      let current: Namespace | undefined = program.getGlobalNamespaceType();
+      const namespaces = interfaceFQN.split(".");
+      const interfaceName = namespaces.pop()!;
+      for (const namespaceName of namespaces) {
+        current = current?.namespaces.get(namespaceName);
+      }
+      return current?.interfaces.get(interfaceName);
+    })
+    .filter((x): x is Interface => x !== undefined);
+}
+
 export function getAllRoutes(
   program: Program,
   options?: RouteOptions
@@ -728,21 +756,12 @@ export function getAllRoutes(
   let operations: OperationDetails[] = [];
   const diagnostics = createDiagnosticCollector();
   const serviceNamespace = getServiceNamespace(program);
-  const containers: Type[] = [
-    ...(serviceNamespace ? [serviceNamespace] : []),
-    ...Array.from(program.stateSet(routeContainerKey)),
-  ];
+  const namespacesToExport: Namespace[] = serviceNamespace ? [serviceNamespace] : [];
 
-  const visitedOperations = new Set<OperationType>();
-  for (const container of containers) {
-    // Is this container a templated interface that hasn't been instantiated?
-    if (container.kind === "Interface" && isTemplateDeclaration(container)) {
-      // Skip template interface operations
-      continue;
-    }
-
+  const visitedOperations = new Set<Operation>();
+  for (const container of namespacesToExport) {
     const newOps = diagnostics.pipe(
-      getRoutesForContainer(program, container as OperationContainer, visitedOperations, options)
+      getRoutesForContainer(program, container, visitedOperations, options)
     );
 
     // Make sure we don't visit the same operations again
@@ -754,6 +773,15 @@ export function getAllRoutes(
 
   validateRouteUnique(diagnostics, operations);
   return diagnostics.wrap(operations);
+}
+
+export function reportIfNoRoutes(program: Program, routes: OperationDetails[]) {
+  if (routes.length === 0) {
+    reportDiagnostic(program, {
+      code: "no-routes",
+      target: program.getGlobalNamespaceType(),
+    });
+  }
 }
 
 function validateRouteUnique(diagnostics: DiagnosticCollector, operations: OperationDetails[]) {
@@ -804,7 +832,7 @@ const resourceOperationToVerb: any = {
   list: "get",
 };
 
-const autoRouteKey = Symbol("autoRoute");
+const autoRouteKey = createStateSymbol("autoRoute");
 
 /**
  * `@autoRoute` enables automatic route generation for an operation, namespace, or interface.
@@ -820,19 +848,13 @@ export function $autoRoute(context: DecoratorContext, entity: Type) {
     return;
   }
 
-  // Register the container of the operation as one that holds routed operations
-  addRouteContainer(context.program, entity);
-
   context.program.stateSet(autoRouteKey).add(entity);
 }
 
-export function isAutoRoute(
-  program: Program,
-  target: NamespaceType | InterfaceType | OperationType
-): boolean {
+export function isAutoRoute(program: Program, target: Namespace | Interface | Operation): boolean {
   // Loop up through parent scopes (interface, namespace) to see if
   // @autoRoute was used anywhere
-  let current: NamespaceType | InterfaceType | OperationType | undefined = target;
+  let current: Namespace | Interface | Operation | undefined = target;
   while (current !== undefined) {
     if (program.stateSet(autoRouteKey).has(current)) {
       return true;

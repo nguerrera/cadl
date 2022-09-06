@@ -1,27 +1,29 @@
 import { validateDecoratorTarget } from "../core/decorator-utils.js";
 import { createDiagnostic } from "../core/messages.js";
 import { Program } from "../core/program.js";
-import { DecoratorContext, NamespaceType, Projector, Type } from "../core/types.js";
+import { DecoratorContext, Namespace, Type } from "../core/types.js";
 
 interface ServiceDetails {
-  namespace?: NamespaceType;
+  namespace?: Namespace;
   title?: string;
   version?: string;
   host?: string;
 }
 
-const programServiceDetails = new WeakMap<Program | Projector, ServiceDetails>();
-function getServiceDetails(program: Program) {
-  let serviceDetails = programServiceDetails.get(program.currentProjector ?? program);
+const serviceDetailsKey = Symbol.for("ServiceDetails");
+function getServiceDetails(program: Program): ServiceDetails {
+  const programServiceDetails = program.stateMap(serviceDetailsKey);
+  const key = program.getGlobalNamespaceType();
+  let serviceDetails = programServiceDetails.get(key);
   if (!serviceDetails) {
     serviceDetails = {};
-    programServiceDetails.set(program.currentProjector ?? program, serviceDetails);
+    programServiceDetails.set(key, serviceDetails);
   }
 
   return serviceDetails;
 }
 
-export function setServiceNamespace(program: Program, namespace: NamespaceType): void {
+export function setServiceNamespace(program: Program, namespace: Namespace): void {
   const serviceDetails = getServiceDetails(program);
   if (serviceDetails.namespace && serviceDetails.namespace !== namespace) {
     program.reportDiagnostic(
@@ -32,7 +34,7 @@ export function setServiceNamespace(program: Program, namespace: NamespaceType):
   serviceDetails.namespace = namespace;
 }
 
-export function checkIfServiceNamespace(program: Program, namespace: NamespaceType): boolean {
+export function checkIfServiceNamespace(program: Program, namespace: Namespace): boolean {
   const serviceDetails = getServiceDetails(program);
   return serviceDetails.namespace === namespace;
 }
@@ -87,9 +89,9 @@ export function getServiceVersion(program: Program): string {
   return serviceDetails.version || "0000-00-00";
 }
 
-export function getServiceNamespace(program: Program): NamespaceType | undefined {
+export function getServiceNamespace(program: Program): Namespace | undefined {
   const serviceDetails = getServiceDetails(program);
-  return serviceDetails.namespace ?? program.checker.getGlobalNamespaceType();
+  return serviceDetails.namespace ?? program.getGlobalNamespaceType();
 }
 
 export function getServiceNamespaceString(program: Program): string | undefined {

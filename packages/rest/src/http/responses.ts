@@ -8,14 +8,14 @@ import {
   isErrorModel,
   isIntrinsic,
   isVoidType,
-  ModelType,
-  ModelTypeProperty,
-  OperationType,
+  Model,
+  ModelProperty,
+  Operation,
   Program,
   Type,
   walkPropertiesInherited,
 } from "@cadl-lang/compiler";
-import { createDiagnostic } from "../diagnostics.js";
+import { createDiagnostic } from "../lib.js";
 import {
   getHeaderFieldName,
   getStatusCodeDescription,
@@ -35,7 +35,7 @@ export interface HttpOperationResponse {
 }
 
 export interface HttpOperationResponseContent {
-  headers?: Record<string, ModelTypeProperty>;
+  headers?: Record<string, ModelProperty>;
   body?: HttpOperationBody;
 }
 
@@ -49,7 +49,7 @@ export interface HttpOperationBody {
  */
 export function getResponsesForOperation(
   program: Program,
-  operation: OperationType
+  operation: Operation
 ): [HttpOperationResponse[], readonly Diagnostic[]] {
   const diagnostics = createDiagnosticCollector();
   const responseType = operation.returnType;
@@ -204,7 +204,7 @@ function getResponseContentTypes(
  * @property property Model property
  * @returns List of contnet types and any diagnostics if there was an issue.
  */
-export function getContentTypes(property: ModelTypeProperty): [string[], readonly Diagnostic[]] {
+export function getContentTypes(property: ModelProperty): [string[], readonly Diagnostic[]] {
   const diagnostics = createDiagnosticCollector();
   if (property.type.kind === "String") {
     return [[property.type.value], []];
@@ -233,10 +233,8 @@ export function getContentTypes(property: ModelTypeProperty): [string[], readonl
 /**
  * Get response headers from response metadata
  */
-function getResponseHeaders(
-  program: Program,
-  metadata: Set<ModelTypeProperty>
-): Record<string, ModelTypeProperty> {
+function getResponseHeaders(program: Program, responseModel: Type): Record<string, ModelProperty> {
+  responseModel: Type
   const responseHeaders: Record<string, ModelTypeProperty> = {};
   for (const prop of metadata) {
     const headerName = getHeaderFieldName(program, prop);
@@ -263,7 +261,7 @@ function getResponseBody(
   }
 
   // look for explicit body
-  let bodyProperty: ModelTypeProperty | undefined;
+    const getAllBodyProps = (m: ModelType): ModelTypeProperty[] => {
   for (const property of metadata) {
     if (isBody(program, property)) {
       if (bodyProperty) {

@@ -48,6 +48,13 @@ using the preview.
 
 `@next` version of the package are the latest versions available on the `main` branch.
 
+## Try Cadl without installing anything
+
+You can try Cadl on the web without installing anything.
+
+- [Cadl playground](https://cadlplayground.z22.web.core.windows.net)
+- [Cadl playground for Azure services](https://cadlplayground.z22.web.core.windows.net/cadl-azure/)
+
 ## Getting Started
 
 ### Using Docker
@@ -137,7 +144,6 @@ namespace Example {
   @route("/message")
   op getMessage(): string;
 }
-
 ```
 
 You can compile it to OpenAPI 3.0 by using the following command:

@@ -1,12 +1,13 @@
 import {
-  checkIfServiceNamespace,
+  BooleanLiteral,
   compilerAssert,
   emitFile,
   EmitOptionsFor,
-  EnumMemberType,
-  EnumType,
+  Enum,
+  EnumMember,
   getAllTags,
   getDoc,
+  getEffectiveModelType,
   getFormat,
   getIntrinsicModelName,
   getKnownValues,
@@ -33,16 +34,21 @@ import {
   isStringType,
   isTemplateDeclaration,
   isTemplateDeclarationOrInstance,
-  ModelType,
-  ModelTypeProperty,
-  NamespaceType,
+  Model,
+  ModelProperty,
+  Namespace,
   NewLine,
+  NumericLiteral,
+  OperationType,
   Program,
+  ProjectionApplication,
+  projectProgram,
   resolvePath,
+  StringLiteral,
   Type,
   TypeNameOptions,
-  UnionType,
-  UnionTypeVariant,
+  Union,
+  UnionVariant,
 } from "@cadl-lang/compiler";
 import {
   checkDuplicateTypeName,
@@ -56,17 +62,17 @@ import {
 import { Discriminator, getDiscriminator, http } from "@cadl-lang/rest";
 import {
   getAllRoutes,
+  getAuthentication,
   getContentTypes,
   getRequestVisibility,
   getStatusCodeDescription,
-  getVisibilitySuffix,
   HttpOperationParameter,
   HttpOperationParameters,
   HttpOperationResponse,
   isApplicableMetadata,
   isVisible,
   OperationDetails,
-  Visibility,
+  ServiceAuthentication,
 } from "@cadl-lang/rest/http";
 import { buildVersionProjections } from "@cadl-lang/versioning";
 import { getOneOf, getRef } from "./decorators.js";
@@ -74,10 +80,13 @@ import { OpenAPI3EmitterOptions, OpenAPILibrary, reportDiagnostic } from "./lib.
 import {
   OpenAPI3Discriminator,
   OpenAPI3Document,
+  OpenAPI3OAuthFlows,
   OpenAPI3Operation,
   OpenAPI3Parameter,
   OpenAPI3ParameterType,
   OpenAPI3Schema,
+  OpenAPI3SchemaProperty,
+  OpenAPI3SecurityScheme,
   OpenAPI3Server,
   OpenAPI3ServerVariable,
 } from "./types.js";
@@ -111,68 +120,6 @@ export function resolveOptions(
 // helper functions for other decorators.  The security information given here
 // will be inserted into the `security` and `securityDefinitions` sections of
 // the emitted OpenAPI document.
-
-const securityDetailsKey = Symbol("securityDetails");
-interface SecurityDetails {
-  definitions: any;
-  requirements: any[];
-}
-
-function getSecurityDetails(program: Program, serviceNamespace: NamespaceType): SecurityDetails {
-  const definitions = program.stateMap(securityDetailsKey);
-  if (definitions.has(serviceNamespace)) {
-    return definitions.get(serviceNamespace)!;
-  } else {
-    const details = { definitions: {}, requirements: [] };
-    definitions.set(serviceNamespace, details);
-    return details;
-  }
-}
-
-function getSecurityRequirements(program: Program, serviceNamespace: NamespaceType) {
-  return getSecurityDetails(program, serviceNamespace).requirements;
-}
-
-function getSecurityDefinitions(program: Program, serviceNamespace: NamespaceType) {
-  return getSecurityDetails(program, serviceNamespace).definitions;
-}
-
-export function addSecurityRequirement(
-  program: Program,
-  namespace: NamespaceType,
-  name: string,
-  scopes: string[]
-): void {
-  if (!checkIfServiceNamespace(program, namespace)) {
-    reportDiagnostic(program, {
-      code: "security-service-namespace",
-      target: namespace,
-    });
-  }
-
-  const req: any = {};
-  req[name] = scopes;
-  const requirements = getSecurityRequirements(program, namespace);
-  requirements.push(req);
-}
-
-export function addSecurityDefinition(
-  program: Program,
-  namespace: NamespaceType,
-  name: string,
-  details: any
-): void {
-  if (!checkIfServiceNamespace(program, namespace)) {
-    reportDiagnostic(program, {
-      code: "security-service-namespace",
-      target: namespace,
-    });
-    return;
-  }
-
-  const definitions = getSecurityDefinitions(program, namespace);
-  definitions[name] = details;
-}
 
 export interface ResolvedOpenAPI3EmitterOptions {
   outputFile: string;
@@ -227,10 +174,14 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
   // be made to point to that definition.
   let pendingSchemas = new Map<Type, Map<Visibility, PendingSchema>>();
 
+  // Keep track of inline types still in the process of having their schema computed
+  // This is used to detect cycles in inline types, which is an
+  let inProgressInlineTypes = new Set<Type>();
+
   // Map model properties that represent shared parameters to their parameter
   // definition that will go in #/components/parameters. Inlined parameters do not go in
   // this map.
-  let params: Map<ModelTypeProperty, any>;
+  let params: Map<ModelProperty, any>;
 
   // De-dupe the per-endpoint tags that will be added into the #/tags
   let tags: Set<string>;
@@ -245,7 +196,9 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
 
   return { emitOpenAPI };
 
-  function initializeEmitter(serviceNamespaceType: NamespaceType, version?: string) {
+  function initializeEmitter(serviceNamespaceType: Namespace, version?: string) {
+    const auth = processAuth(serviceNamespaceType);
+
     root = {
       openapi: "3.0.0",
       info: {
@@ -256,13 +209,14 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
       externalDocs: getExternalDocs(program, serviceNamespaceType),
       tags: [],
       paths: {},
+      security: auth?.security,
       components: {
         parameters: {},
         requestBodies: {},
         responses: {},
         schemas: {},
         examples: {},
-        securitySchemes: {},
+        securitySchemes: auth?.securitySchemes ?? {},
       },
     };
     const servers = http.getServers(program, serviceNamespaceType);
@@ -273,6 +227,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     serviceNamespace = getServiceNamespaceString(program);
     currentPath = root.paths;
     pendingSchemas = new Map();
+    inProgressInlineTypes = new Set();
     params = new Map();
     tags = new Set();
   }
@@ -286,7 +241,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
         const name = getIntrinsicModelName(program, type);
         return name === "string";
       case "Enum":
-        for (const member of type.members) {
+        for (const member of type.members.values()) {
           if (member.value && typeof member.value !== "string") {
             return false;
           }
@@ -304,7 +259,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     }
   }
 
-  function validateValidServerVariable(program: Program, prop: ModelTypeProperty) {
+  function validateValidServerVariable(program: Program, prop: ModelProperty) {
     const isValid = isValidServerVariableType(program, prop.type);
 
     if (!isValid) {
@@ -337,6 +292,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
         } else if (prop.type.kind === "String") {
           variable.enum = [prop.type.value];
         }
+        attachExtensions(program, prop, variable);
         variables[name] = variable;
       }
       return {
@@ -352,6 +308,13 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     if (!serviceNs) {
       return;
     }
+    const commonProjections: ProjectionApplication[] = [
+      {
+        projectionName: "target",
+        arguments: ["json"],
+      },
+    ];
+    const originalProgram = program;
     const versions = buildVersionProjections(program, serviceNs);
     for (const record of versions) {
       if (record.version) {
@@ -361,18 +324,18 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
         });
       }
 
-      if (record.projections.length > 0) {
-        program.enableProjections(record.projections);
-      }
+      program = projectProgram(originalProgram, [...commonProjections, ...record.projections]);
 
       await emitOpenAPIFromVersion(serviceNs, record.version);
     }
   }
 
-  async function emitOpenAPIFromVersion(serviceNamespace: NamespaceType, version?: string) {
+  async function emitOpenAPIFromVersion(serviceNamespace: Namespace, version?: string) {
     initializeEmitter(serviceNamespace, version);
     try {
       const [routes] = getAllRoutes(program);
+      reportIfNoRoutes(program, routes);
+
       for (const operation of routes) {
         emitOperation(operation);
       }
@@ -529,7 +492,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     return getStatusCodeDescription(statusCode) ?? "unknown";
   }
 
-  function getResponseHeader(prop: ModelTypeProperty) {
+  function getResponseHeader(prop: ModelProperty) {
     const header: any = {};
     populateParameter(header, prop, "header", Visibility.Read);
     delete header.in;
@@ -562,6 +525,15 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
       return mapCadlTypeToOpenAPI(type, visibility);
     }
 
+    if (type.kind === "EnumMember") {
+      // Enum members are just the OA representation of their values.
+      if (typeof type.value === "number") {
+        return { type: "number", enum: [type.value] };
+      } else {
+        return { type: "string", enum: [type.value ?? type.name] };
+      }
+    }
+
     type = getEffectiveSchemaType(type, visibility);
 
     let map = pendingSchemas.get(type);
@@ -571,7 +543,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     }
 
     if (shouldInline(program, type)) {
-      const schema = getSchemaForType(type, visibility);
+      const schema = getSchemaForInlineType(type, name);
 
       if (schema === undefined && isErrorType(type)) {
         // Exit early so that syntax errors are exposed.  This error will
@@ -598,6 +570,21 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     }
   }
 
+  function getSchemaForInlineType(type: Type, name: string) {
+    if (inProgressInlineTypes.has(type)) {
+      reportDiagnostic(program, {
+        code: "inline-cycle",
+        format: { type: name },
+        target: type,
+      });
+      return {};
+    }
+    inProgressInlineTypes.add(type);
+    const schema = getSchemaForType(type);
+    inProgressInlineTypes.delete(type);
+    return schema;
+  }
+
   /**
    * If type is an anonymous model, tries to find a named model that has the same
    * set of properties when non-schema properties are excluded.
@@ -607,7 +594,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
       // NOTE: We don't apply visibility here. It is handled separately. Remvoing
       //       invisible properties here would trigger inlining rather than the
       //       naming scheme we use for schemas that differ by visibility.
-      const effective = program.checker.getEffectiveModelType(
+      const effective = program.checker.getEffectiveModelType(type, isSchemaProperty);
         type,
         (p) => !isApplicableMetadata(program, p, visibility)
       );
@@ -618,7 +605,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     return type;
   }
 
-  function getParamPlaceholder(property: ModelTypeProperty) {
+  function getParamPlaceholder(property: ModelProperty) {
     let spreadParam = false;
 
     if (property.sourceProperty) {
@@ -676,6 +663,8 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
   }
 
   function emitRequestBody(parameters: HttpOperationParameters, visibility: Visibility) {
+    op: OperationType,
+    parent: ModelType | undefined,
     const bodyType = parameters.bodyType;
     const bodyParam = parameters.bodyParameter;
 
@@ -708,7 +697,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     currentEndpoint.requestBody = requestBody;
   }
 
-  function emitParameter(
+  function emitParameter(param: ModelTypeProperty, kind: OpenAPI3ParameterType) {
     param: ModelTypeProperty,
     kind: OpenAPI3ParameterType,
     visibility: Visibility
@@ -724,7 +713,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
 
   function populateParameter(
     ph: OpenAPI3Parameter,
-    param: ModelTypeProperty,
+    param: ModelProperty,
     kind: OpenAPI3ParameterType,
     visibility: Visibility
   ) {
@@ -933,14 +922,14 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     return undefined;
   }
 
-  function getSchemaForEnum(e: EnumType) {
+  function getSchemaForEnum(e: Enum) {
     const values = [];
-    if (e.members.length == 0) {
+    if (e.members.size == 0) {
       reportUnsupportedUnion("empty");
       return undefined;
     }
-    const type = enumMemberType(e.members[0]);
-    for (const option of e.members) {
+    const type = enumMemberType(e.members.values().next().value);
+    for (const option of e.members.values()) {
       if (type !== enumMemberType(option)) {
         reportUnsupportedUnion();
         continue;
@@ -955,7 +944,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     }
 
     return schema;
-    function enumMemberType(member: EnumMemberType) {
+    function enumMemberType(member: EnumMember) {
       if (typeof member.value === "number") {
         return "number";
       }
@@ -967,101 +956,117 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     }
   }
 
-  function getSchemaForUnion(union: UnionType, visibility: Visibility) {
-    let type: string;
-    const nonNullOptions = union.options.filter((t) => !isNullType(t));
-    const nullable = union.options.length != nonNullOptions.length;
-    if (nonNullOptions.length === 0) {
-      reportDiagnostic(program, { code: "union-null", target: union });
-      return {};
+  /**
+   * A Cadl union maps to a variety of OA3 structures according to the following rules:
+   *
+   * * A union containing `null` makes a `nullable` schema comprised of the remaining
+   *   union variants.
+   * * A union containing literal types are converted to OA3 enums. All literals of the
+   *   same type are combined into single enums.
+   * * A union that contains multiple items (after removing null and combining like-typed
+   *   literals into enums) is an `anyOf` union unless `oneOf` is applied to the union
+   *   declaration.
+   */
+  function getSchemaForUnion(union: UnionType) {
+    const variants = Array.from(union.variants.values());
+    const literalVariantEnumByType: Record<string, any> = {};
+    const ofType = getOneOf(program, union) ? "oneOf" : "anyOf";
+    const schemaMembers: { schema: any; type: Type | null }[] = [];
+    let nullable = false;
+    const discriminator = getDiscriminator(program, union);
+
+    for (const variant of variants) {
+      if (isNullType(variant.type)) {
+        nullable = true;
+        continue;
+      }
+
+      if (isLiteralType(variant.type)) {
+        if (!literalVariantEnumByType[variant.type.kind]) {
+          const enumSchema = mapCadlTypeToOpenAPI(variant.type);
+          literalVariantEnumByType[variant.type.kind] = enumSchema;
+          schemaMembers.push({ schema: enumSchema, type: null });
+        } else {
+          literalVariantEnumByType[variant.type.kind].enum.push(variant.type.value);
+        }
+        continue;
+      }
+
+      schemaMembers.push({ schema: getSchemaOrRef(variant.type), type: variant.type });
     }
 
-    const kind = nonNullOptions[0].kind;
-    switch (kind) {
-      case "String":
-        type = "string";
-        break;
-      case "Number":
-        type = "number";
-        break;
-      case "Boolean":
-        type = "boolean";
-        break;
-      case "Model":
-        type = "model";
-        break;
-      case "UnionVariant":
-        type = "model";
-        break;
-      default:
-        reportUnsupportedUnionType(nonNullOptions[0]);
+    if (schemaMembers.length === 0) {
+      if (nullable) {
+        // This union is equivalent to just `null` but OA3 has no way to specify
+        // null as a value, so we throw an error.
+        reportDiagnostic(program, { code: "union-null", target: union });
         return {};
+      } else {
+        // completely empty union can maybe only happen with bugs?
+        compilerAssert(false, "Attempting to emit an empty union");
+      }
     }
 
-    if (type === "model" || type === "array") {
-      if (nonNullOptions.length === 1) {
-        // Get the schema for the model type
-        let schema: any = getSchemaOrRef(nonNullOptions[0], visibility);
-        if (nullable && schema.$ref) {
-          schema = {
-            type: "object",
-            allOf: [schema],
-            nullable: true,
-          };
-        } else if (nullable) {
+    if (schemaMembers.length === 1) {
+      // we can just return the single schema member after applying nullable
+      const schema = schemaMembers[0].schema;
+        let schema: any = getSchemaOrRef(nonNullOptions[0]);
+
+      if (nullable) {
+        if (schema.$ref) {
+          // but we can't make a ref "nullable", so wrap in an allOf (for models)
+          // or oneOf (for all other types)
+          if (type && type.kind === "Model") {
+            return { type: "object", allOf: [schema], nullable: true };
+          } else {
+            return { oneOf: [schema], nullable: true };
+          }
+        } else {
+        const schema: any = {
+        const schema: any = { [ofType]: nonNullOptions.map((s) => getSchemaOrRef(s)) };
+        };
           schema.nullable = true;
         }
-        return schema;
-      } else {
-        const ofType = getOneOf(program, union) ? "oneOf" : "anyOf";
-        const schema: any = {
-          [ofType]: nonNullOptions.map((s) => getSchemaOrRef(s, visibility)),
-        };
-        return schema;
-      }
-    }
-
-    const values = [];
-    for (const option of nonNullOptions) {
-      if (option.kind != kind) {
-        reportUnsupportedUnion();
       }
 
-      // We already know it's not a model type
-      values.push((option as any).value);
+      return schema;
     }
 
-    const schema: any = { type };
-    if (values.length > 0) {
-      schema.enum = values;
-    }
+    const schema: any = {
+      [ofType]: schemaMembers.map((m) => m.schema),
+    };
+
     if (nullable) {
-      schema["nullable"] = true;
+      schema.nullable = true;
+    }
+
+    if (discriminator) {
+      // the decorator validates that all the variants will be a model type
+      // with the discriminator field present.
+      schema.discriminator = discriminator;
+      const mapping = getDiscriminatorMapping(
+        discriminator,
+        variants.map((v) => v.type) as Model[]
+      );
+      if (mapping) {
+        schema.discriminator.mapping = mapping;
+      }
     }
 
     return schema;
-
-    function reportUnsupportedUnionType(type: Type) {
-      reportDiagnostic(program, {
-        code: "union-unsupported",
-        messageId: "type",
-        format: { kind: type.kind },
-        target: type,
-      });
-    }
-
-    function reportUnsupportedUnion() {
-      reportDiagnostic(program, { code: "union-unsupported", target: union });
-    }
   }
 
-  function getSchemaForUnionVariant(variant: UnionTypeVariant, visibility: Visibility) {
+  function getSchemaForUnionVariant(variant: UnionTypeVariant) {
     const schema: any = getSchemaForType(variant.type, visibility);
     return schema;
   }
 
   function isNullType(type: Type): boolean {
     return isIntrinsic(program, type) && getIntrinsicModelName(program, type) === "null";
+  }
+
+  function isLiteralType(type: Type): type is StringLiteral | NumericLiteral | BooleanLiteral {
+    return type.kind === "Boolean" || type.kind === "String" || type.kind === "Number";
   }
 
   function getDefaultValue(type: Type): any {
@@ -1074,6 +1079,8 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
         return type.value;
       case "Tuple":
         return type.values.map(getDefaultValue);
+      case "EnumMember":
+        return type.value ?? type.name;
       default:
         reportDiagnostic(program, {
           code: "invalid-default",
@@ -1083,7 +1090,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     }
   }
 
-  function includeDerivedModel(model: ModelType): boolean {
+  function includeDerivedModel(model: Model): boolean {
     return (
       !isTemplateDeclaration(model) &&
       (model.templateArguments === undefined ||
@@ -1092,7 +1099,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     );
   }
 
-  function getSchemaForModel(model: ModelType, visibility: Visibility) {
+  function getSchemaForModel(model: ModelType) {
     let modelSchema: OpenAPI3Schema & Required<Pick<OpenAPI3Schema, "properties">> = {
       type: "object",
       properties: {},
@@ -1135,7 +1142,6 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
         continue;
       }
 
-      const description = getDoc(program, prop);
       if (!prop.optional) {
         if (!modelSchema.required) {
           modelSchema.required = [];
@@ -1143,25 +1149,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
         modelSchema.required.push(name);
       }
 
-      // Apply decorators on the property to the type's schema
-      const property: any = (modelSchema.properties[name] = applyIntrinsicDecorators(
-        prop,
-        getSchemaOrRef(prop.type, visibility)
-      ));
-      if (description) {
-        property.description = description;
-      }
-
-      if (prop.default) {
-        property.default = getDefaultValue(prop.default);
-      }
-
-      if (isReadonlyProperty(prop)) {
-        property.readOnly = true;
-      }
-
-      // Attach any additional OpenAPI extensions
-      attachExtensions(program, prop, modelSchema.properties[name]);
+      modelSchema.properties[name] = resolveProperty(prop);
     }
 
     // Special case: if a model type extends a single *templated* base type and
@@ -1190,6 +1178,42 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     return modelSchema;
   }
 
+  function resolveProperty(prop: ModelProperty): OpenAPI3SchemaProperty {
+    const description = getDoc(program, prop);
+
+    const schema = getSchemaOrRef(prop.type);
+    // Apply decorators on the property to the type's schema
+    const additionalProps: Partial<OpenAPI3Schema> = applyIntrinsicDecorators(prop, {});
+    if (description) {
+      additionalProps.description = description;
+    }
+
+    if (prop.default) {
+      additionalProps.default = getDefaultValue(prop.default);
+    }
+
+    // Should the property be marked as readOnly?
+    const vis = getVisibility(program, prop);
+    if (vis && vis.includes("read") && vis.length == 1) {
+      additionalProps.readOnly = true;
+    }
+
+    // Attach any additional OpenAPI extensions
+    attachExtensions(program, prop, additionalProps);
+    if ("$ref" in schema) {
+      if (Object.keys(additionalProps).length === 0) {
+        return schema;
+      } else {
+        return {
+          allOf: [schema],
+          ...additionalProps,
+        };
+      }
+    } else {
+      return { ...schema, ...additionalProps };
+    }
+  }
+
   function attachExtensions(program: Program, type: Type, emitObject: any) {
     // Attach any OpenAPI extensions
     const extensions = getExtensions(program, type);
@@ -1202,7 +1226,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
 
   function validateDiscriminator(
     discriminator: Discriminator,
-    childModels: readonly ModelType[]
+    childModels: readonly Model[]
   ): boolean {
     const { propertyName } = discriminator;
     const retVals = childModels.map((t) => {
@@ -1303,11 +1327,13 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
       return [type.value];
     } else if (type.kind === "Union") {
       return type.options.flatMap(getStringValues).filter((v) => v);
+    } else if (type.kind === "EnumMember" && typeof type.value !== "number") {
+      return [type.value ?? type.name];
     }
     return [];
   }
 
-  function isReadonlyProperty(property: ModelTypeProperty) {
+  function isSchemaProperty(property: ModelTypeProperty) {
     const visibility = getVisibility(program, property);
     // note: multiple visibilities that include read are not handled using
     // readonly: true, but using separate schemas.
@@ -1315,7 +1341,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
   }
 
   function applyIntrinsicDecorators(
-    cadlType: ModelType | ModelTypeProperty,
+    cadlType: Model | ModelProperty,
     target: OpenAPI3Schema
   ): OpenAPI3Schema {
     const newTarget = { ...target };
@@ -1397,7 +1423,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
   /**
    * Map Cadl intrinsic models to open api definitions
    */
-  function mapCadlIntrinsicModelToOpenAPI(
+  function mapCadlIntrinsicModelToOpenAPI(cadlType: ModelType): any | undefined {
     cadlType: ModelType,
     visibility: Visibility
   ): any | undefined {
@@ -1459,6 +1485,65 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
         return { type: "string", format: "time" };
       case "duration":
         return { type: "string", format: "duration" };
+    }
+  }
+
+  function processAuth(serviceNamespace: Namespace):
+    | {
+        securitySchemes: Record<string, OpenAPI3SecurityScheme>;
+        security: Record<string, string[]>[];
+      }
+    | undefined {
+    const authentication = getAuthentication(program, serviceNamespace);
+    if (authentication) {
+      return processServiceAuthentication(authentication);
+    }
+    return undefined;
+  }
+
+  function processServiceAuthentication(authentication: ServiceAuthentication): {
+    securitySchemes: Record<string, OpenAPI3SecurityScheme>;
+    security: Record<string, string[]>[];
+  } {
+    const oaiSchemes: Record<string, OpenAPI3SecurityScheme> = {};
+    const security: Record<string, string[]>[] = [];
+    for (const option of authentication.options) {
+      const oai3SecurityOption: Record<string, string[]> = {};
+      for (const scheme of option.schemes) {
+        const [oaiScheme, scopes] = getOpenAPI3Scheme(scheme);
+        oaiSchemes[scheme.id] = oaiScheme;
+        oai3SecurityOption[scheme.id] = scopes;
+      }
+      security.push(oai3SecurityOption);
+    }
+    return { securitySchemes: oaiSchemes, security };
+  }
+
+  function getOpenAPI3Scheme(auth: HttpAuth): [OpenAPI3SecurityScheme, string[]] {
+    switch (auth.type) {
+      case "http":
+        return [{ type: "http", scheme: auth.scheme, description: auth.description }, []];
+      case "apiKey":
+        return [
+          { type: "apiKey", in: auth.in, name: auth.name, description: auth.description },
+          [],
+        ];
+      case "oauth2":
+        const flows: OpenAPI3OAuthFlows = {};
+        const scopes: string[] = [];
+        for (const flow of auth.flows) {
+          scopes.push(...flow.scopes.map((x) => x.value));
+          flows[flow.type] = {
+            authorizationUrl: (flow as any).authorizationUrl,
+            tokenUrl: (flow as any).tokenUrl,
+            refreshUrl: flow.refreshUrl,
+            scopes: Object.fromEntries(flow.scopes.map((x) => [x.value, x.description ?? ""])),
+          };
+        }
+        return [{ type: "oauth2", flows, description: auth.description }, scopes];
+      default:
+        const _assertNever: never = auth;
+        compilerAssert(false, "Unreachable");
     }
   }
 }
