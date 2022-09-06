@@ -27,7 +27,8 @@
     "vscode": "^1.53.0"
   },
   "activationEvents": [
-    "onLanguage:cadl"
+    "onLanguage:cadl",
+    "onCommand:cadl.restartServer"
   ],
   "files": [
     "cadl-vscode-*.vsix",
@@ -85,7 +86,8 @@
       {
         "command": "cadl.restartServer",
         "title": "Restart Cadl server",
-        "category": "Cadl"
+        "category": "Cadl",
+        "enablement": ""
       }
     ],
     "semanticTokenScopes": [

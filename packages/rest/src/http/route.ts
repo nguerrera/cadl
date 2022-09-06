@@ -1,4 +1,5 @@
 import {
+  compilerAssert,
   createDiagnosticCollector,
   DecoratorContext,
   Diagnostic,
@@ -6,15 +7,19 @@ import {
   filterModelProperties,
   getServiceNamespace,
   Interface,
+  isArrayModelType,
   isGlobalNamespace,
+  isIntrinsic,
   isTemplateDeclaration,
   isTemplateDeclarationOrInstance,
+  isVisible as isVisibleCore,
   ModelProperty,
   Namespace,
   Operation,
   Program,
   Type,
   validateDecoratorTarget,
+  walkPropertiesInherited,
 } from "@cadl-lang/compiler";
 import { createDiagnostic, createStateSymbol, reportDiagnostic } from "../lib.js";
 import {
@@ -32,6 +37,10 @@ import {
   getQueryParamName,
   HttpVerb,
   isBody,
+  isHeader,
+  isPathParam,
+  isQueryParam,
+  isStatusCode,
 } from "./decorators.js";
 import { getResponsesForOperation, HttpOperationResponse } from "./responses.js";
 
@@ -60,6 +69,7 @@ export interface HttpOperationParameters {
   parameters: HttpOperationParameter[];
   bodyType?: Type;
   bodyParameter?: ModelProperty;
+  verb: HttpVerb;
 }
 
 export interface OperationDetails {
@@ -75,6 +85,73 @@ export interface OperationDetails {
 export interface RoutePath {
   path: string;
   isReset: boolean;
+}
+
+// REVIEW: It ends up being helpful to store visibility as flags in an enum.
+//         Currently core visibility API is still string[] and these flags are used
+//         only by rest lib / openapi emitter. Can we push this down? Or does core
+//         still require that visibility can be any string?
+export enum Visibility {
+  Read = 1 << 0,
+  Create = 1 << 1,
+  Update = 1 << 2,
+  Delete = 1 << 3,
+  Query = 1 << 4,
+
+  All = Read | Create | Update | Delete | Query,
+
+  /**
+   * Additional flag to indicate when something is nested in a collection
+   * and therefore no metadata is applicable.
+   */
+  Item = 1 << 20,
+}
+
+const visibilityToArrayMap: Map<Visibility, string[]> = new Map();
+function visibilityToArray(visibility: Visibility): readonly string[] {
+  // Item flag is not a real visibility.
+  visibility &= ~Visibility.Item;
+
+  let result = visibilityToArrayMap.get(visibility);
+  if (!result) {
+    result = [];
+
+    if (visibility & Visibility.Read) {
+      result.push("read");
+    }
+    if (visibility & Visibility.Create) {
+      result.push("create");
+    }
+    if (visibility & Visibility.Update) {
+      result.push("update");
+    }
+    if (visibility & Visibility.Delete) {
+      result.push("delete");
+    }
+    if (visibility & Visibility.Query) {
+      result.push("query");
+    }
+
+    compilerAssert(result.length > 0, "invalid visibility");
+    visibilityToArrayMap.set(visibility, result);
+  }
+
+  return result;
+}
+
+export function getVisibilitySuffix(visibility: Visibility) {
+  let suffix = "";
+
+  if ((visibility & ~Visibility.Item) !== Visibility.Read) {
+    const visibilities = visibilityToArray(visibility);
+    suffix += visibilities.map((v) => v[0].toUpperCase() + v.slice(1)).join("Or");
+  }
+
+  if (visibility & Visibility.Item) {
+    suffix += "Item";
+  }
+
+  return suffix;
 }
 
 /**
@@ -192,17 +269,190 @@ function addSegmentFragment(program: Program, target: Type, pathFragments: strin
   }
 }
 
+export function getRequestVisibility(verb: HttpVerb): Visibility {
+  switch (verb) {
+    case "get":
+    case "head":
+      return Visibility.Query;
+    case "post":
+      return Visibility.Create;
+    case "put":
+      return Visibility.Create | Visibility.Update;
+    case "patch":
+      return Visibility.Update;
+    case "delete":
+      return Visibility.Delete;
+
+    default:
+      const _assertNever: never = verb;
+      compilerAssert(false, "unreachable");
+  }
+}
+
+export function gatherMetadata(
+  program: Program,
+  diagnostics: DiagnosticCollector,
+  type: Type,
+  visibility: Visibility
+): Set<ModelProperty> {
+  if (type.kind !== "Model") {
+    return new Set();
+  }
+
+  if (isIntrinsic(program, type) || isArrayModelType(program, type)) {
+    return new Set();
+  }
+
+  const visited = new Set();
+  const metadata = new Map<string, ModelProperty>();
+  const queue = [type];
+
+  while (queue.length > 0) {
+    const model = queue.shift()!; // REVIEW: This is probably not an efficient way to queue.
+    visited.add(model);
+
+    for (const property of walkPropertiesInherited(model)) {
+      if (!isVisible(program, property, visibility)) {
+        continue;
+      }
+
+      // REVIEW: Proposal says duplicates are "invalid" metadata and invalid
+      // metadata is not an error but becomes part of the schema. This is
+      // problematic, though, because it creates an an unbounded number of
+      // variants of the same model, depending on where it is referenced.
+      // Keeping track of these and naming them is especially hard.
+      //
+      // I propose making it an error, but that currently breaks some
+      // samples and tests.
+      //
+      // The traversal here is level order so that the preferred metadata in
+      // the case of duplicates (ultimately for error recovery when
+      // diagnostic is added) is the least deep, which seems least
+      // surprising and most compatible with prior behavior.
+      if (metadata.has(property.name)) {
+        // TODO: diagnostics.add(...)
+        continue;
+      }
+
+      if (isApplicableMetadataOrBody(program, property, visibility)) {
+        metadata.set(property.name, property);
+      }
+
+      if (
+        property.type.kind === "Model" &&
+        !isIntrinsic(program, property.type) &&
+        !isArrayModelType(program, property.type) &&
+        !visited.has(property.type)
+      ) {
+        queue.push(property.type);
+      }
+    }
+  }
+
+  return new Set(metadata.values());
+}
+
+// REVIEW: Move these helpers out of route.ts
+
+export function isMetadata(program: Program, property: ModelProperty) {
+  return (
+    isHeader(program, property) ||
+    isQueryParam(program, property) ||
+    isPathParam(program, property) ||
+    isStatusCode(program, property)
+  );
+}
+
+export function isVisible(program: Program, property: ModelProperty, visibility: Visibility) {
+  return isVisibleCore(program, property, visibilityToArray(visibility));
+}
+
+export function isApplicableMetadata(
+  program: Program,
+  property: ModelProperty,
+  visibility: Visibility
+) {
+  return isApplicableMetadataCore(program, property, visibility, false);
+}
+
+export function isApplicableMetadataOrBody(
+  program: Program,
+  property: ModelProperty,
+  visibility: Visibility
+) {
+  return isApplicableMetadataCore(program, property, visibility, true);
+}
+
+function isApplicableMetadataCore(
+  program: Program,
+  property: ModelProperty,
+  visibility: Visibility,
+  treatBodyAsMetadata: boolean
+) {
+  if (visibility & Visibility.Item) {
+    return false; // no metadata is applicable to collection items
+  }
+
+  if (treatBodyAsMetadata && isBody(program, property)) {
+    return true;
+  }
+
+  if (!isMetadata(program, property)) {
+    return false;
+  }
+
+  if (visibility === Visibility.Read) {
+    return isHeader(program, property) || isStatusCode(program, property);
+  }
+
+  if (!(visibility & Visibility.Read)) {
+    return !isStatusCode(program, property);
+  }
+
+  return true;
+}
+
 export function getOperationParameters(
   program: Program,
   operation: Operation
 ): [HttpOperationParameters, readonly Diagnostic[]] {
+  const verb = getExplicitVerbForOperation(program, operation);
+  if (verb) {
+    return getOperationParametersWithVerb(program, operation, verb);
+  }
+
+  const postResult = getOperationParametersWithVerb(program, operation, "post");
+  if (postResult[0].bodyType) {
+    return postResult;
+  }
+
+  const getResult = getOperationParametersWithVerb(program, operation, "get");
+  if (getResult[0].bodyType) {
+    // Worst case:
+    //   - no verb is specified
+    //   - if "post" verb is chosen, there is no body after visibility
+    //   - if "get" verb is chosen, there is a body after visibility
+    compilerAssert(false, "TODO: Diagnostic");
+  }
+
+  return getResult;
+}
+
+function getOperationParametersWithVerb(
+  program: Program,
+  operation: Operation,
+  verb: HttpVerb
+): [HttpOperationParameters, readonly Diagnostic[]] {
   const diagnostics = createDiagnosticCollector();
+  const visibility = getRequestVisibility(verb);
+  const metadata = gatherMetadata(program, diagnostics, operation.parameters, visibility);
+
   const result: HttpOperationParameters = {
     parameters: [],
+    verb
   };
-  const unannotatedParams = new Set<ModelProperty>();
 
-  for (const param of operation.parameters.properties.values()) {
+  for (const param of metadata) {
     const queryParam = getQueryParamName(program, param);
     const pathParam = getPathParamName(program, param);
     const headerParam = getHeaderFieldName(program, param);
@@ -228,11 +478,13 @@ export function getOperationParameters(
       result.parameters.push({ type: "query", name: queryParam, param });
     } else if (pathParam) {
       if (param.optional && param.default === undefined) {
-        reportDiagnostic(program, {
-          code: "optional-path-param",
-          format: { paramName: param.name },
-          target: operation,
-        });
+        diagnostics.add(
+          createDiagnostic({
+            code: "optional-path-param",
+            format: { paramName: param.name },
+            target: operation,
+          })
+        );
       }
       result.parameters.push({ type: "path", name: pathParam, param });
     } else if (headerParam) {
@@ -244,16 +496,18 @@ export function getOperationParameters(
       } else {
         diagnostics.add(createDiagnostic({ code: "duplicate-body", target: param }));
       }
-    } else {
-      unannotatedParams.add(param);
     }
   }
 
-  if (unannotatedParams.size > 0) {
+  const unannotatedProperties = filterModelProperties(
+    program,
+    operation.parameters,
+    (p) => !metadata.has(p)
+  );
+
+  if (unannotatedProperties.properties.size > 0) {
     if (result.bodyType === undefined) {
-      result.bodyType = filterModelProperties(program, operation.parameters, (p) =>
-        unannotatedParams.has(p)
-      );
+      result.bodyType = unannotatedProperties;
     } else {
       diagnostics.add(
         createDiagnostic({
@@ -371,12 +625,8 @@ function getPathForOperation(
   };
 }
 
-function getVerbForOperation(
-  program: Program,
-  diagnostics: DiagnosticCollector,
-  operation: Operation,
-  parameters: HttpOperationParameters
-): HttpVerb {
+// returns undefined for default verb (post with request body, get otherwise)
+function getExplicitVerbForOperation(program: Program, operation: Operation): HttpVerb | undefined {
   const resourceOperation = getResourceOperation(program, operation);
   const verb =
     (resourceOperation && resourceOperationToVerb[resourceOperation.operation]) ??
@@ -384,13 +634,15 @@ function getVerbForOperation(
     // TODO: Enable this verb choice to be customized!
     (getAction(program, operation) || getCollectionAction(program, operation) ? "post" : undefined);
 
-  if (verb !== undefined) {
-    return verb;
-  }
+  return verb;
+}
 
-  // If no verb was found by this point, choose a verb based on whether there is
-  // a body type for the request
-  return parameters.bodyType ? "post" : "get";
+function getVerbForOperation(
+  program: Program,
+  operation: Operation,
+  parameters: HttpOperationParameters
+): HttpVerb {
+  return getExplicitVerbForOperation(program, operation) ?? (parameters.bodyType ? "post" : "get");
 }
 
 function buildRoutes(
@@ -424,7 +676,7 @@ function buildRoutes(
     }
 
     const route = getPathForOperation(program, diagnostics, op, parentFragments, options);
-    const verb = getVerbForOperation(program, diagnostics, op, route.parameters);
+    const verb = getVerbForOperation(program, op, route.parameters);
     const responses = diagnostics.pipe(getResponsesForOperation(program, op));
 
     operations.push({

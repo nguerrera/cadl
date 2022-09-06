@@ -424,6 +424,7 @@ export function getVisibility(program: Program, target: Type): string[] | undefi
   return program.stateMap(visibilitySettingsKey).get(target);
 }
 
+
 export function $withVisibility(
   context: DecoratorContext,
   target: Type,
@@ -433,21 +434,25 @@ export function $withVisibility(
     return;
   }
 
-  const filter = (_: any, prop: ModelProperty) => {
-    const vis = getVisibility(context.program, prop);
-    return vis !== undefined && visibilities.filter((v) => !vis.includes(v)).length > 0;
-  };
-
-  mapFilterOut(target.properties, filter);
+  filterModelPropertiesInPlace(target, (p) => isVisible(context.program, p, visibilities));
 }
 
-function mapFilterOut(
-  map: Map<string, ModelProperty>,
-  pred: (key: string, prop: ModelProperty) => boolean
+export function isVisible(
+  program: Program,
+  property: ModelProperty,
+  visibilities: readonly string[]
 ) {
-  for (const [key, prop] of map) {
-    if (pred(key, prop)) {
-      map.delete(key);
+  const propertyVisibilities = getVisibility(program, property);
+  return !propertyVisibilities || propertyVisibilities.some((v) => visibilities.includes(v));
+}
+
+function filterModelPropertiesInPlace(
+  model: Model,
+  filter: (prop: ModelProperty) => boolean
+) {
+  for (const [key, prop] of model.properties) {
+    if (!filter(prop)) {
+      model.properties.delete(key);
     }
   }
 }
@@ -470,11 +475,7 @@ export function $withUpdateableProperties(context: DecoratorContext, target: Typ
     return;
   }
 
-  // remove all read-only properties from the target type
-  mapFilterOut(target.properties, (key, value) => {
-    const vis = getVisibility(context.program, value);
-    return vis !== undefined && vis.length > 0 && !vis.includes("update");
-  });
+  filterModelPropertiesInPlace(target, (p) => isVisible(context.program, p, ["update"]));
 }
 
 // -- @withoutOmittedProperties decorator ----------------------
@@ -510,7 +511,7 @@ export function $withoutOmittedProperties(
   }
 
   // Remove all properties to be omitted
-  mapFilterOut(target.properties, (key, _) => omitNames.has(key));
+  filterModelPropertiesInPlace(target, (prop) => !omitNames.has(prop.name));
 }
 
 // -- @withoutDefaultValues decorator ----------------------

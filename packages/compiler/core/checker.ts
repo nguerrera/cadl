@@ -2837,7 +2837,7 @@ export function createChecker(program: Program): Checker {
     return nsNode;
   }
 
-  function createGlobalNamespaceType() {
+  function createGlobalNamespaceType(): Namespace {
     return createAndFinishType({
       kind: "Namespace",
       name: "",
@@ -4279,7 +4279,7 @@ function getProjectedEffectiveModelType(program: Program | ProjectedProgram, typ
   return projectedType;
 }
 
-function* walkPropertiesInherited(model: Model) {
+export function* walkPropertiesInherited(model: Model) {
   let current: Model | undefined = model;
 
   while (current) {

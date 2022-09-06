@@ -15,6 +15,7 @@ const config = definePlaygroundViteConfig({
     "Discriminated unions": "samples/unions.cadl",
     "Http service": "samples/http.cadl",
     "REST framework": "samples/rest.cadl",
+    Metadata: "samples/metadata.cadl",
   },
   enableSwaggerUI: true,
 });
