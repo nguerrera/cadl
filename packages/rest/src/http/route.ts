@@ -34,6 +34,7 @@ import {
   HttpVerb,
   isBody,
 } from "./decorators.js";
+import { gatherMetadata, getRequestVisibility } from "./metadata.js";
 import { getResponsesForOperation, HttpOperationResponse } from "./responses.js";
 
 export type OperationContainer = Namespace | Interface;
@@ -61,6 +62,15 @@ export interface HttpOperationParameters {
   parameters: HttpOperationParameter[];
   bodyType?: Type;
   bodyParameter?: ModelProperty;
+
+  /**
+   * @internal
+   * NOTE: The verb is determined when processing parameters as it can
+   * depend on whether there is a request body if not explicitly specified.
+   * Marked internal to keep from polluting the public API with the verb at
+   * two levels.
+   */
+  verb: HttpVerb;
 }
 
 export interface OperationDetails {
@@ -197,13 +207,34 @@ export function getOperationParameters(
   program: Program,
   operation: Operation
 ): [HttpOperationParameters, readonly Diagnostic[]] {
+  const verb = getExplicitVerbForOperation(program, operation);
+  if (verb) {
+    return getOperationParametersForVerb(program, operation, verb);
+  }
+
+  // If no verb is explicitly specified, it is POST if there is a body and
+  // GET otherwise. Theoretically, it is possible to use @visibility
+  // strangely such that there is no body if the verb is POST and there is a
+  // body if the verb is GET. In that rare case, GET is chosen arbitrarily.
+  const post = getOperationParametersForVerb(program, operation, "post");
+  return post[0].bodyType ? post : getOperationParametersForVerb(program, operation, "get");
+}
+
+function getOperationParametersForVerb(
+  program: Program,
+  operation: Operation,
+  verb: HttpVerb
+): [HttpOperationParameters, readonly Diagnostic[]] {
   const diagnostics = createDiagnosticCollector();
+  const visibility = getRequestVisibility(verb);
+  const metadata = gatherMetadata(program, diagnostics, operation.parameters, visibility);
+
   const result: HttpOperationParameters = {
     parameters: [],
+    verb,
   };
-  const unannotatedParams = new Set<ModelProperty>();
 
-  for (const param of operation.parameters.properties.values()) {
+  for (const param of metadata) {
     const queryParam = getQueryParamName(program, param);
     const pathParam = getPathParamName(program, param);
     const headerParam = getHeaderFieldName(program, param);
@@ -229,11 +260,13 @@ export function getOperationParameters(
       result.parameters.push({ type: "query", name: queryParam, param });
     } else if (pathParam) {
       if (param.optional && param.default === undefined) {
-        reportDiagnostic(program, {
-          code: "optional-path-param",
-          format: { paramName: param.name },
-          target: operation,
-        });
+        diagnostics.add(
+          createDiagnostic({
+            code: "optional-path-param",
+            format: { paramName: param.name },
+            target: operation,
+          })
+        );
       }
       result.parameters.push({ type: "path", name: pathParam, param });
     } else if (headerParam) {
@@ -245,16 +278,18 @@ export function getOperationParameters(
       } else {
         diagnostics.add(createDiagnostic({ code: "duplicate-body", target: param }));
       }
-    } else {
-      unannotatedParams.add(param);
     }
   }
 
-  if (unannotatedParams.size > 0) {
+  const unannotatedProperties = filterModelProperties(
+    program,
+    operation.parameters,
+    (p) => !metadata.has(p)
+  );
+
+  if (unannotatedProperties.properties.size > 0) {
     if (result.bodyType === undefined) {
-      result.bodyType = filterModelProperties(program, operation.parameters, (p) =>
-        unannotatedParams.has(p)
-      );
+      result.bodyType = unannotatedProperties;
     } else {
       diagnostics.add(
         createDiagnostic({
@@ -372,12 +407,8 @@ function getPathForOperation(
   };
 }
 
-function getVerbForOperation(
-  program: Program,
-  diagnostics: DiagnosticCollector,
-  operation: Operation,
-  parameters: HttpOperationParameters
-): HttpVerb {
+// returns undefined for default verb (post with request body, get otherwise)
+function getExplicitVerbForOperation(program: Program, operation: Operation): HttpVerb | undefined {
   const resourceOperation = getResourceOperation(program, operation);
   const verb =
     (resourceOperation && resourceOperationToVerb[resourceOperation.operation]) ??
@@ -385,13 +416,7 @@ function getVerbForOperation(
     // TODO: Enable this verb choice to be customized!
     (getAction(program, operation) || getCollectionAction(program, operation) ? "post" : undefined);
 
-  if (verb !== undefined) {
-    return verb;
-  }
-
-  // If no verb was found by this point, choose a verb based on whether there is
-  // a body type for the request
-  return parameters.bodyType ? "post" : "get";
+  return verb;
 }
 
 function buildRoutes(
@@ -425,13 +450,12 @@ function buildRoutes(
     }
 
     const route = getPathForOperation(program, diagnostics, op, parentFragments, options);
-    const verb = getVerbForOperation(program, diagnostics, op, route.parameters);
     const responses = diagnostics.pipe(getResponsesForOperation(program, op));
 
     operations.push({
       path: route.path,
       pathFragment: route.pathFragment,
-      verb,
+      verb: route.parameters.verb,
       container,
       parameters: route.parameters,
       operation: op,
