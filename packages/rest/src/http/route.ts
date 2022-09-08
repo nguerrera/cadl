@@ -69,6 +69,14 @@ export interface HttpOperationParameters {
   parameters: HttpOperationParameter[];
   bodyType?: Type;
   bodyParameter?: ModelProperty;
+
+  /**
+   * @internal
+   * NOTE: The verb is determined when processing parameters as it can
+   * depend on whether there is a request body if not explicitly specified.
+   * Marked internal to keep from polluting the public API with the verb at
+   * two levels.
+   */
   verb: HttpVerb;
 }
 
@@ -418,27 +426,18 @@ export function getOperationParameters(
 ): [HttpOperationParameters, readonly Diagnostic[]] {
   const verb = getExplicitVerbForOperation(program, operation);
   if (verb) {
-    return getOperationParametersWithVerb(program, operation, verb);
+    return getOperationParametersForVerb(program, operation, verb);
   }
 
-  const postResult = getOperationParametersWithVerb(program, operation, "post");
-  if (postResult[0].bodyType) {
-    return postResult;
-  }
-
-  const getResult = getOperationParametersWithVerb(program, operation, "get");
-  if (getResult[0].bodyType) {
-    // Worst case:
-    //   - no verb is specified
-    //   - if "post" verb is chosen, there is no body after visibility
-    //   - if "get" verb is chosen, there is a body after visibility
-    compilerAssert(false, "TODO: Diagnostic");
-  }
-
-  return getResult;
+  // If no verb is explicitly specified, it is POST if there is a body and
+  // GET otherwise. Theoretically, it is possible to use @visibility
+  // strangely such that there is no body if the verb is POST and there is a
+  // body if the verb is GET. In that rare case, GET is chosen arbitrarily.
+  const post = getOperationParametersForVerb(program, operation, "post");
+  return post[0].bodyType ? post : getOperationParametersForVerb(program, operation, "get");
 }
 
-function getOperationParametersWithVerb(
+function getOperationParametersForVerb(
   program: Program,
   operation: Operation,
   verb: HttpVerb
@@ -449,7 +448,7 @@ function getOperationParametersWithVerb(
 
   const result: HttpOperationParameters = {
     parameters: [],
-    verb
+    verb,
   };
 
   for (const param of metadata) {
@@ -637,14 +636,6 @@ function getExplicitVerbForOperation(program: Program, operation: Operation): Ht
   return verb;
 }
 
-function getVerbForOperation(
-  program: Program,
-  operation: Operation,
-  parameters: HttpOperationParameters
-): HttpVerb {
-  return getExplicitVerbForOperation(program, operation) ?? (parameters.bodyType ? "post" : "get");
-}
-
 function buildRoutes(
   program: Program,
   diagnostics: DiagnosticCollector,
@@ -676,13 +667,12 @@ function buildRoutes(
     }
 
     const route = getPathForOperation(program, diagnostics, op, parentFragments, options);
-    const verb = getVerbForOperation(program, op, route.parameters);
     const responses = diagnostics.pipe(getResponsesForOperation(program, op));
 
     operations.push({
       path: route.path,
       pathFragment: route.pathFragment,
-      verb,
+      verb: route.parameters.verb,
       container,
       parameters: route.parameters,
       operation: op,
