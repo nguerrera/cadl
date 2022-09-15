@@ -14,7 +14,6 @@ import { getResponsesForOperation } from "./responses.js";
 import { resolvePathAndParameters } from "./route.js";
 import {
   HttpOperation,
-  HttpOperationParameters,
   HttpService,
   HttpVerb,
   OperationContainer,
@@ -33,13 +32,11 @@ export function getHttpOperation(
 ): [HttpOperation, readonly Diagnostic[]] {
   const diagnostics = createDiagnosticCollector();
   const route = diagnostics.pipe(resolvePathAndParameters(program, operation, options ?? {}));
-
-  const verb = getVerbForOperation(program, operation, route.parameters);
   const responses = diagnostics.pipe(getResponsesForOperation(program, operation));
 
   return diagnostics.wrap({
     path: route.path,
-    verb,
+    verb: route.parameters.verb,
     container: operation.interface ?? operation.namespace ?? program.getGlobalNamespaceType(),
     parameters: route.parameters,
     operation,
@@ -149,12 +146,11 @@ export function validateRouteUnique(diagnostics: DiagnosticCollector, operations
     }
   }
 }
-
-function getVerbForOperation(
+// returns undefined for default verb (post with request body, get otherwise)
+export function getExplicitVerbForOperation(
   program: Program,
-  operation: Operation,
-  parameters: HttpOperationParameters
-): HttpVerb {
+  operation: Operation
+): HttpVerb | undefined {
   const resourceOperation = getResourceOperation(program, operation);
   const verb =
     (resourceOperation && resourceOperationToVerb[resourceOperation.operation]) ??
@@ -162,13 +158,7 @@ function getVerbForOperation(
     // TODO: Enable this verb choice to be customized!
     (getAction(program, operation) || getCollectionAction(program, operation) ? "post" : undefined);
 
-  if (verb !== undefined) {
-    return verb;
-  }
-
-  // If no verb was found by this point, choose a verb based on whether there is
-  // a body type for the request
-  return parameters.bodyType ? "post" : "get";
+  return verb;
 }
 
 // TODO: Make this overridable by libraries

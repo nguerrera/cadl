@@ -11,14 +11,8 @@ import {
   Union,
   walkPropertiesInherited,
 } from "@cadl-lang/compiler";
-import {
-  HttpVerb,
-  isBody,
-  isHeader,
-  isPathParam,
-  isQueryParam,
-  isStatusCode,
-} from "./decorators.js";
+import { isBody, isHeader, isPathParam, isQueryParam, isStatusCode } from "./decorators.js";
+import { HttpVerb } from "./types.js";
 
 /**
  * Flags enum representation of well-known visibilities that are used in

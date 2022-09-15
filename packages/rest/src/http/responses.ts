@@ -24,6 +24,7 @@ import {
   isHeader,
   isStatusCode,
 } from "./decorators.js";
+import { gatherMetadata, isApplicableMetadata, Visibility } from "./metadata.js";
 import { HttpOperationResponse } from "./types.js";
 
 /**

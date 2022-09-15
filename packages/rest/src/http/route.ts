@@ -1,170 +1,23 @@
 import {
   createDiagnosticCollector,
-  DecoratorContext,
   Diagnostic,
-  DiagnosticCollector,
-  filterModelProperties,
-  getServiceNamespace,
   Interface,
-  isGlobalNamespace,
-  isTemplateDeclaration,
-  isTemplateDeclarationOrInstance,
-  ModelProperty,
   Namespace,
   Operation,
   Program,
   Type,
-  validateDecoratorTarget,
 } from "@cadl-lang/compiler";
-import { createDiagnostic, createStateSymbol, reportDiagnostic } from "../lib.js";
-import {
-  getAction,
-  getCollectionAction,
-  getResourceOperation,
-  getSegment,
-  getSegmentSeparator,
-  isAutoRoute,
-} from "../rest.js";
+import { createDiagnostic, createStateSymbol } from "../lib.js";
+import { getSegment, getSegmentSeparator, isAutoRoute } from "../rest.js";
 import { extractParamsFromPath } from "../utils.js";
+import { getRouteOptionsForNamespace, getRoutePath } from "./decorators.js";
+import { getOperationParameters } from "./parameters.js";
 import {
-  getHeaderFieldName,
-  getOperationVerb,
-  getPathParamName,
-  getQueryParamName,
-  HttpVerb,
-  isBody,
-} from "./decorators.js";
-import { gatherMetadata, getRequestVisibility } from "./metadata.js";
-import { getResponsesForOperation, HttpOperationResponse } from "./responses.js";
-
-export type OperationContainer = Namespace | Interface;
-
-export interface FilteredRouteParam {
-  routeParamString?: string;
-  excludeFromOperationParams?: boolean;
-}
-
-export interface AutoRouteOptions {
-  routeParamFilter?: (op: Operation, param: ModelProperty) => FilteredRouteParam | undefined;
-}
-
-export interface RouteOptions {
-  autoRouteOptions?: AutoRouteOptions;
-}
-
-export interface HttpOperationParameter {
-  type: "query" | "path" | "header";
-  name: string;
-  param: ModelProperty;
-}
-
-export interface HttpOperationParameters {
-  parameters: HttpOperationParameter[];
-  bodyType?: Type;
-  bodyParameter?: ModelProperty;
-
-  /**
-   * @internal
-   * NOTE: The verb is determined when processing parameters as it can
-   * depend on whether there is a request body if not explicitly specified.
-   * Marked internal to keep from polluting the public API with the verb at
-   * two levels.
-   */
-  verb: HttpVerb;
-}
-
-export interface OperationDetails {
-  path: string;
-  pathFragment?: string;
-  verb: HttpVerb;
-  container: OperationContainer;
-  parameters: HttpOperationParameters;
-  responses: HttpOperationResponse[];
-  operation: Operation;
-}
-
-export interface RoutePath {
-  path: string;
-  isReset: boolean;
-}
-
-/**
- * `@route` defines the relative route URI for the target operation
- *
- * The first argument should be a URI fragment that may contain one or more path parameter fields.
- * If the namespace or interface that contains the operation is also marked with a `@route` decorator,
- * it will be used as a prefix to the route URI of the operation.
- *
- * `@route` can only be applied to operations, namespaces, and interfaces.
- */
-export function $route(context: DecoratorContext, entity: Type, path: string) {
-  setRoute(context, entity, {
-    path,
-    isReset: false,
-  });
-}
-
-export function $routeReset(context: DecoratorContext, entity: Type, path: string) {
-  setRoute(context, entity, {
-    path,
-    isReset: true,
-  });
-}
-
-const routeOptionsKey = createStateSymbol("routeOptions");
-export function setRouteOptionsForNamespace(
-  program: Program,
-  namespace: Namespace,
-  options: RouteOptions
-) {
-  program.stateMap(routeOptionsKey).set(namespace, options);
-}
-
-function getRouteOptionsForNamespace(
-  program: Program,
-  namespace: Namespace
-): RouteOptions | undefined {
-  return program.stateMap(routeOptionsKey).get(namespace);
-}
-
-const routesKey = createStateSymbol("routes");
-function setRoute(context: DecoratorContext, entity: Type, details: RoutePath) {
-  if (
-    !validateDecoratorTarget(context, entity, "@route", ["Namespace", "Interface", "Operation"])
-  ) {
-    return;
-  }
-
-  const state = context.program.stateMap(routesKey);
-
-  if (state.has(entity)) {
-    if (entity.kind === "Operation" || entity.kind === "Interface") {
-      reportDiagnostic(context.program, {
-        code: "duplicate-route-decorator",
-        messageId: entity.kind === "Operation" ? "operation" : "interface",
-        target: entity,
-      });
-    } else {
-      const existingValue: RoutePath = state.get(entity);
-      if (existingValue.path !== details.path) {
-        reportDiagnostic(context.program, {
-          code: "duplicate-route-decorator",
-          messageId: "namespace",
-          target: entity,
-        });
-      }
-    }
-  } else {
-    state.set(entity, details);
-  }
-}
-
-export function getRoutePath(
-  program: Program,
-  entity: Namespace | Interface | Operation
-): RoutePath | undefined {
-  return program.stateMap(routesKey).get(entity);
-}
+  HttpOperationParameter,
+  HttpOperationParameters,
+  RouteOptions,
+  RouteResolutionOptions,
+} from "./types.js";
 
 // The set of allowed segment separator characters
 const AllowedSegmentSeparators = ["/", ":"];
@@ -203,112 +56,12 @@ function addSegmentFragment(program: Program, target: Type, pathFragments: strin
   }
 }
 
-export function getOperationParameters(
-  program: Program,
-  operation: Operation
-): [HttpOperationParameters, readonly Diagnostic[]] {
-  const verb = getExplicitVerbForOperation(program, operation);
-  if (verb) {
-    return getOperationParametersForVerb(program, operation, verb);
-  }
-
-  // If no verb is explicitly specified, it is POST if there is a body and
-  // GET otherwise. Theoretically, it is possible to use @visibility
-  // strangely such that there is no body if the verb is POST and there is a
-  // body if the verb is GET. In that rare case, GET is chosen arbitrarily.
-  const post = getOperationParametersForVerb(program, operation, "post");
-  return post[0].bodyType ? post : getOperationParametersForVerb(program, operation, "get");
-}
-
-function getOperationParametersForVerb(
-  program: Program,
-  operation: Operation,
-  verb: HttpVerb
-): [HttpOperationParameters, readonly Diagnostic[]] {
-  const diagnostics = createDiagnosticCollector();
-  const visibility = getRequestVisibility(verb);
-  const metadata = gatherMetadata(program, diagnostics, operation.parameters, visibility);
-
-  const result: HttpOperationParameters = {
-    parameters: [],
-    verb,
-  };
-
-  for (const param of metadata) {
-    const queryParam = getQueryParamName(program, param);
-    const pathParam = getPathParamName(program, param);
-    const headerParam = getHeaderFieldName(program, param);
-    const bodyParam = isBody(program, param);
-
-    const defined = [
-      ["query", queryParam],
-      ["path", pathParam],
-      ["header", headerParam],
-      ["body", bodyParam],
-    ].filter((x) => !!x[1]);
-    if (defined.length >= 2) {
-      diagnostics.add(
-        createDiagnostic({
-          code: "operation-param-duplicate-type",
-          format: { paramName: param.name, types: defined.map((x) => x[0]).join(", ") },
-          target: param,
-        })
-      );
-    }
-
-    if (queryParam) {
-      result.parameters.push({ type: "query", name: queryParam, param });
-    } else if (pathParam) {
-      if (param.optional && param.default === undefined) {
-        diagnostics.add(
-          createDiagnostic({
-            code: "optional-path-param",
-            format: { paramName: param.name },
-            target: operation,
-          })
-        );
-      }
-      result.parameters.push({ type: "path", name: pathParam, param });
-    } else if (headerParam) {
-      result.parameters.push({ type: "header", name: headerParam, param });
-    } else if (bodyParam) {
-      if (result.bodyType === undefined) {
-        result.bodyParameter = param;
-        result.bodyType = param.type;
-      } else {
-        diagnostics.add(createDiagnostic({ code: "duplicate-body", target: param }));
-      }
-    }
-  }
-
-  const unannotatedProperties = filterModelProperties(
-    program,
-    operation.parameters,
-    (p) => !metadata.has(p)
-  );
-
-  if (unannotatedProperties.properties.size > 0) {
-    if (result.bodyType === undefined) {
-      result.bodyType = unannotatedProperties;
-    } else {
-      diagnostics.add(
-        createDiagnostic({
-          code: "duplicate-body",
-          messageId: "bodyAndUnannotated",
-          target: operation,
-        })
-      );
-    }
-  }
-  return diagnostics.wrap(result);
-}
-
 function generatePathFromParameters(
   program: Program,
   operation: Operation,
   pathFragments: string[],
   parameters: HttpOperationParameters,
-  options: RouteOptions
+  options: RouteResolutionOptions
 ) {
   const filteredParameters: HttpOperationParameter[] = [];
   for (const httpParam of parameters.parameters) {
@@ -346,25 +99,25 @@ function generatePathFromParameters(
   addSegmentFragment(program, operation, pathFragments);
 }
 
-function getPathForOperation(
+export function resolvePathAndParameters(
   program: Program,
-  diagnostics: DiagnosticCollector,
   operation: Operation,
-  routeFragments: string[],
-  options: RouteOptions
-): { path: string; pathFragment?: string; parameters: HttpOperationParameters } {
+  options: RouteResolutionOptions
+): [{ path: string; parameters: HttpOperationParameters }, readonly Diagnostic[]] {
+  const diagnostics = createDiagnosticCollector();
   const parameters = diagnostics.pipe(getOperationParameters(program, operation));
-  const pathFragments = [...routeFragments];
-  const routePath = getRoutePath(program, operation);
+  let segments: string[];
   if (isAutoRoute(program, operation)) {
+    let parentOptions;
+    [segments, parentOptions] = getParentSegments(program, operation);
     // The operation exists within an @autoRoute scope, generate the path.  This
     // mutates the pathFragments and parameters lists that are passed in!
-    generatePathFromParameters(program, operation, pathFragments, parameters, options);
+    generatePathFromParameters(program, operation, segments, parameters, {
+      ...parentOptions,
+      ...options,
+    });
   } else {
-    // Prepend any explicit route path
-    if (routePath) {
-      pathFragments.push(routePath.path);
-    }
+    [segments] = getRouteSegments(program, operation);
 
     // Pull out path parameters to verify what's in the path string
     const paramByName = new Map(
@@ -374,7 +127,7 @@ function getPathForOperation(
     );
 
     // Find path parameter names used in all route fragments
-    const declaredPathParams = pathFragments.flatMap(extractParamsFromPath);
+    const declaredPathParams = segments.flatMap(extractParamsFromPath);
 
     // For each param in the declared path parameters (e.g. /foo/{id} has one, id),
     // delete it because it doesn't need to be added to the path.
@@ -396,109 +149,37 @@ function getPathForOperation(
 
     // Add any remaining declared path params
     for (const param of paramByName.keys()) {
-      pathFragments.push(`{${param}}`);
+      segments.push(`{${param}}`);
     }
   }
 
-  return {
-    path: buildPath(pathFragments),
-    pathFragment: routePath?.path,
+  return diagnostics.wrap({
+    path: buildPath(segments),
     parameters,
-  };
+  });
 }
 
-// returns undefined for default verb (post with request body, get otherwise)
-function getExplicitVerbForOperation(program: Program, operation: Operation): HttpVerb | undefined {
-  const resourceOperation = getResourceOperation(program, operation);
-  const verb =
-    (resourceOperation && resourceOperationToVerb[resourceOperation.operation]) ??
-    getOperationVerb(program, operation) ??
-    // TODO: Enable this verb choice to be customized!
-    (getAction(program, operation) || getCollectionAction(program, operation) ? "post" : undefined);
-
-  return verb;
-}
-
-function buildRoutes(
+function getParentSegments(
   program: Program,
-  diagnostics: DiagnosticCollector,
-  container: OperationContainer,
-  routeFragments: string[],
-  visitedOperations: Set<Operation>,
-  options: RouteOptions
-): OperationDetails[] {
-  if (container.kind === "Interface" && isTemplateDeclaration(container)) {
-    // Skip template interface operations
-    return [];
-  }
-  // Get the route info for this container, if any
-  const baseRoute = getRoutePath(program, container);
-  const parentFragments = [...routeFragments, ...(baseRoute ? [baseRoute.path] : [])];
-
-  // TODO: Allow overriding the existing resource operation of the same kind
-
-  const operations: OperationDetails[] = [];
-  for (const [_, op] of container.operations) {
-    // Skip previously-visited operations
-    if (visitedOperations.has(op)) {
-      continue;
-    }
-
-    // Skip templated operations
-    if (isTemplateDeclarationOrInstance(op)) {
-      continue;
-    }
-
-    const route = getPathForOperation(program, diagnostics, op, parentFragments, options);
-    const responses = diagnostics.pipe(getResponsesForOperation(program, op));
-
-    operations.push({
-      path: route.path,
-      pathFragment: route.pathFragment,
-      verb: route.parameters.verb,
-      container,
-      parameters: route.parameters,
-      operation: op,
-      responses,
-    });
-  }
-
-  // Build all child routes and append them to the list, but don't recurse in
-  // the global scope because that could pull in unwanted operations
-  if (container.kind === "Namespace") {
-    // If building routes for the global namespace we shouldn't navigate the sub namespaces.
-    const includeSubNamespaces = isGlobalNamespace(program, container);
-    const additionalInterfaces = getExternalInterfaces(program, container) ?? [];
-    const children: OperationContainer[] = [
-      ...(includeSubNamespaces ? [] : container.namespaces.values()),
-      ...container.interfaces.values(),
-      ...additionalInterfaces,
-    ];
-
-    const childRoutes = children.flatMap((child) =>
-      buildRoutes(program, diagnostics, child, parentFragments, visitedOperations, options)
-    );
-    for (const child of childRoutes) [operations.push(child)];
-  }
-
-  return operations;
+  target: Operation | Interface | Namespace
+): [string[], RouteOptions | undefined] {
+  return "interface" in target && target.interface
+    ? getRouteSegments(program, target.interface)
+    : target.namespace
+    ? getRouteSegments(program, target.namespace)
+    : [[], undefined];
 }
 
-export function getRoutesForContainer(
+function getRouteSegments(
   program: Program,
-  container: OperationContainer,
-  visitedOperations: Set<Operation>,
-  options?: RouteOptions
-): [OperationDetails[], readonly Diagnostic[]] {
-  const routeOptions =
-    options ??
-    (container.kind === "Namespace" ? getRouteOptionsForNamespace(program, container) : {}) ??
-    {};
-  const diagnostics = createDiagnosticCollector();
-
-  return diagnostics.wrap(
-    buildRoutes(program, diagnostics, container, [], visitedOperations, routeOptions)
-  );
+  target: Operation | Interface | Namespace
+): [string[], RouteOptions | undefined] {
+  const route = getRoutePath(program, target)?.path;
+  const seg = route ? [route] : [];
+  const [parentSegments, parentOptions] = getParentSegments(program, target);
+  const options =
+    target.kind === "Namespace" ? getRouteOptionsForNamespace(program, target) : undefined;
+  return [[...parentSegments, ...seg], options ?? parentOptions];
 }
 
 const externalInterfaces = createStateSymbol("externalInterfaces");
@@ -521,104 +202,3 @@ export function includeInterfaceRoutesInNamespace(
 
   array.push(sourceInterface);
 }
-
-function getExternalInterfaces(program: Program, namespace: Namespace) {
-  const interfaces: string[] | undefined = program.stateMap(externalInterfaces).get(namespace);
-  if (interfaces === undefined) {
-    return undefined;
-  }
-  return interfaces
-    .map((interfaceFQN: string) => {
-      let current: Namespace | undefined = program.getGlobalNamespaceType();
-      const namespaces = interfaceFQN.split(".");
-      const interfaceName = namespaces.pop()!;
-      for (const namespaceName of namespaces) {
-        current = current?.namespaces.get(namespaceName);
-      }
-      return current?.interfaces.get(interfaceName);
-    })
-    .filter((x): x is Interface => x !== undefined);
-}
-
-export function getAllRoutes(
-  program: Program,
-  options?: RouteOptions
-): [OperationDetails[], readonly Diagnostic[]] {
-  let operations: OperationDetails[] = [];
-  const diagnostics = createDiagnosticCollector();
-  const serviceNamespace = getServiceNamespace(program);
-  const namespacesToExport: Namespace[] = serviceNamespace ? [serviceNamespace] : [];
-
-  const visitedOperations = new Set<Operation>();
-  for (const container of namespacesToExport) {
-    const newOps = diagnostics.pipe(
-      getRoutesForContainer(program, container, visitedOperations, options)
-    );
-
-    // Make sure we don't visit the same operations again
-    newOps.forEach((o) => visitedOperations.add(o.operation));
-
-    // Accumulate the new operations
-    operations = [...operations, ...newOps];
-  }
-
-  validateRouteUnique(diagnostics, operations);
-  return diagnostics.wrap(operations);
-}
-
-export function reportIfNoRoutes(program: Program, routes: OperationDetails[]) {
-  if (routes.length === 0) {
-    reportDiagnostic(program, {
-      code: "no-routes",
-      target: program.getGlobalNamespaceType(),
-    });
-  }
-}
-
-function validateRouteUnique(diagnostics: DiagnosticCollector, operations: OperationDetails[]) {
-  const grouped = new Map<string, Map<HttpVerb, OperationDetails[]>>();
-
-  for (const operation of operations) {
-    const { verb, path } = operation;
-    let map = grouped.get(path);
-    if (map === undefined) {
-      map = new Map<HttpVerb, OperationDetails[]>();
-      grouped.set(path, map);
-    }
-
-    let list = map.get(verb);
-    if (list === undefined) {
-      list = [];
-      map.set(verb, list);
-    }
-
-    list.push(operation);
-  }
-
-  for (const [path, map] of grouped) {
-    for (const [verb, routes] of map) {
-      if (routes.length >= 2) {
-        for (const route of routes) {
-          diagnostics.add(
-            createDiagnostic({
-              code: "duplicate-operation",
-              format: { path, verb, operationName: route.operation.name },
-              target: route.operation,
-            })
-          );
-        }
-      }
-    }
-  }
-}
-
-// TODO: Make this overridable by libraries
-const resourceOperationToVerb: any = {
-  read: "get",
-  create: "post",
-  createOrUpdate: "patch",
-  createOrReplace: "put",
-  update: "patch",
-  delete: "delete",
-  list: "get",
-};
