@@ -62,18 +62,18 @@ import {
 import { Discriminator, getDiscriminator, http } from "@cadl-lang/rest";
 import {
   createMetadataInfo,
-  getAllRoutes,
+  getAllHttpServices,
   getAuthentication,
   getContentTypes,
   getRequestVisibility,
   getStatusCodeDescription,
   getVisibilitySuffix,
   HttpAuth,
+  HttpOperation,
   HttpOperationParameter,
   HttpOperationParameters,
   HttpOperationResponse,
   MetadataInfo,
-  OperationDetails,
   reportIfNoRoutes,
   ServiceAuthentication,
   Visibility,
@@ -347,10 +347,11 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
   async function emitOpenAPIFromVersion(serviceNamespace: Namespace, version?: string) {
     initializeEmitter(serviceNamespace, version);
     try {
-      const [routes] = getAllRoutes(program);
-      reportIfNoRoutes(program, routes);
+      const [services] = getAllHttpServices(program);
+      const service = services[0];
+      reportIfNoRoutes(program, service.operations);
 
-      for (const operation of routes) {
+      for (const operation of service.operations) {
         emitOperation(operation);
       }
       emitParameters();
@@ -389,7 +390,7 @@ function createOAPIEmitter(program: Program, options: ResolvedOpenAPI3EmitterOpt
     }
   }
 
-  function emitOperation(operation: OperationDetails): void {
+  function emitOperation(operation: HttpOperation): void {
     const { path: fullPath, operation: op, verb, parameters } = operation;
 
     // If path contains a query string, issue msg and don't emit this endpoint
