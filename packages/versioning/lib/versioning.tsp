@@ -5,7 +5,7 @@ using TypeSpec.Versioning;
 
 #suppress "projections-are-experimental"
 projection op#v {
-  preTo(version) {
+  pre to(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
@@ -18,7 +18,7 @@ projection op#v {
       self::changeReturnType(getReturnTypeBeforeVersion(self, version));
     };
   }
-  preFrom(version) {
+  pre from(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
@@ -32,7 +32,7 @@ projection op#v {
 
 #suppress "projections-are-experimental"
 projection interface#v {
-  preTo(version) {
+  pre to(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
@@ -50,7 +50,7 @@ projection interface#v {
       };
     });
   }
-  preFrom(version) {
+  pre from(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
@@ -70,7 +70,7 @@ projection interface#v {
 
 #suppress "projections-are-experimental"
 projection union#v {
-  preTo(version) {
+  pre to(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
@@ -103,12 +103,12 @@ projection union#v {
 
 #suppress "projections-are-experimental"
 projection unionvariant#v {
-  preTo(version) {
+  pre to(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
   }
-  preFrom(version) {
+  pre from(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
@@ -117,7 +117,7 @@ projection unionvariant#v {
 
 #suppress "projections-are-experimental"
 projection model#v {
-  preTo(version) {
+  pre to(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
@@ -140,7 +140,7 @@ projection model#v {
       };
     });
   }
-  preFrom(version) {
+  pre from(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
@@ -172,12 +172,12 @@ projection model#v {
 
 #suppress "projections-are-experimental"
 projection modelproperty#v {
-  preTo(version) {
+  pre to(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
   }
-  preFrom(version) {
+  pre from(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
@@ -186,7 +186,7 @@ projection modelproperty#v {
 
 #suppress "projections-are-experimental"
 projection enum#v {
-  preTo(version) {
+  pre to(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
@@ -202,7 +202,7 @@ projection enum#v {
       };
     });
   }
-  preFrom(version) {
+  pre from(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
@@ -226,12 +226,12 @@ projection enum#v {
 
 #suppress "projections-are-experimental"
 projection enummember#v {
-  preTo(version) {
+  pre to(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
   }
-  preFrom(version) {
+  pre from(version) {
     if !existsAtVersion(self, version) {
       return never;
     };
