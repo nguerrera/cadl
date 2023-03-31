@@ -1354,22 +1354,17 @@ function printProjectionStatement(
   options: TypeSpecPrettierOptions,
   print: PrettierChildPrint
 ) {
-  const node = path.getValue();
   const selector = path.call(print, "selector");
   const id = path.call(print, "id");
-  const preTo = node.preTo ? [hardline, path.call(print, "preTo")] : "";
-  const to = node.to ? [hardline, path.call(print, "to")] : "";
-  const preFrom = node.preFrom ? [hardline, path.call(print, "preFrom")] : "";
-  const from = node.from ? [hardline, path.call(print, "from")] : "";
-  const body = [preTo, to, preFrom, from];
+  const projections = path.map(print, "projections").flatMap((x) => [hardline, x]);
   return [
     "projection ",
     selector,
     "#",
     id,
     " {",
-    indent(body),
-    node.preTo || node.to || node.preFrom || node.from ? hardline : "",
+    indent(projections),
+    projections.length > 0 ? hardline : "",
     "}",
   ];
 }
@@ -1382,7 +1377,15 @@ function printProjection(
   const node = path.getValue();
   const params = printProjectionParameters(path, options, print);
   const body = printProjectionExpressionStatements(path, options, print, "body");
-  return [node.direction, params, " {", indent(body), hardline, "}"];
+  return [
+    ...node.modifierIds.flatMap((i) => [i.sv, " "]),
+    node.directionId.sv,
+    params,
+    " {",
+    indent(body),
+    hardline,
+    "}",
+  ];
 }
 
 function printProjectionParameters(

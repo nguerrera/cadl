@@ -1554,7 +1554,6 @@ function createParser(code: string | SourceFile, options: ParseOptions = {}): Pa
     const projectionMap = new Map<string, ProjectionNode>();
     const projections: ProjectionNode[] = [];
     while (token() === Token.Identifier) {
-      // TODO: Fixup error recovery
       const projection = parseProjection();
       if (projection.direction !== "<error>") {
         if (projectionMap.has(projection.direction)) {
@@ -1563,7 +1562,7 @@ function createParser(code: string | SourceFile, options: ParseOptions = {}): Pa
           projectionMap.set(projection.direction, projection);
         }
       }
-      // NOTE: Don't drop projections with errors from the AST.
+      // NOTE: Don't drop projections with error in direction definition from the AST.
       projections.push(projection);
     }
     parseExpected(Token.CloseBrace);
@@ -1572,8 +1571,8 @@ function createParser(code: string | SourceFile, options: ParseOptions = {}): Pa
       kind: SyntaxKind.ProjectionStatement,
       selector,
       projections,
-      preTo: projectionMap.get("preTo"),
-      preFrom: projectionMap.get("preFrom"),
+      preTo: projectionMap.get("pre_to"),
+      preFrom: projectionMap.get("pre_from"),
       from: projectionMap.get("from"),
       to: projectionMap.get("to"),
       id,
@@ -1583,26 +1582,32 @@ function createParser(code: string | SourceFile, options: ParseOptions = {}): Pa
 
   function parseProjection(): ProjectionNode {
     const pos = tokenPos();
-    const directionId = parseIdentifier({ message: "projectionDirection" });
-    let direction: "to" | "from" | "preTo" | "preFrom" | "<error>";
+    let directionId = parseIdentifier({ message: "projectionDirection" });
+    let direction: "to" | "from" | "pre_to" | "pre_from" | "<error>";
+    const modifierIds: IdentifierNode[] = [];
+    let isPre = false;
 
-    if (
-      directionId.sv !== "from" &&
-      directionId.sv !== "to" &&
-      directionId.sv !== "preTo" &&
-      directionId.sv !== "preFrom"
-    ) {
+    if (directionId.sv === "pre") {
+      isPre = true;
+      modifierIds.push(directionId);
+      directionId = parseIdentifier({ message: "projectionDirection" });
+    }
+    if (directionId.sv !== "to" && directionId.sv !== "from") {
       error({ code: "token-expected", messageId: "projectionDirection" });
       direction = "<error>";
+    } else if (isPre) {
+      direction = directionId.sv === "to" ? "pre_to" : "pre_from";
     } else {
       direction = directionId.sv;
     }
+
     let parameters: ProjectionParameterDeclarationNode[];
     if (token() === Token.OpenParen) {
       parameters = parseList(ListKind.ProjectionParameter, parseProjectionParameter);
     } else {
       parameters = [];
     }
+
     parseExpected(Token.OpenBrace);
     const body: ProjectionStatementItem[] = parseProjectionStatementList();
     parseExpected(Token.CloseBrace);
@@ -1612,6 +1617,7 @@ function createParser(code: string | SourceFile, options: ParseOptions = {}): Pa
       body,
       direction,
       directionId,
+      modifierIds,
       parameters,
       ...finishNode(pos),
     };

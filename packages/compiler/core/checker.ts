@@ -304,7 +304,7 @@ export function createChecker(program: Program): Checker {
   const processedProjections = new Set<ProjectionStatementNode>();
 
   // interpreter state
-  let currentProjectionDirection: "to" | "from" | "preTo" | "preFrom" | undefined;
+  let currentProjectionDirection: "to" | "from" | "pre_to" | "pre_from" | undefined;
   /**
    * Set keeping track of node pending type resolution.
    * Key is the SymId of a node. It can be retrieved with getNodeSymId(node)

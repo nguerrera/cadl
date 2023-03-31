@@ -1411,7 +1411,7 @@ export interface ProjectionBlockExpressionNode extends BaseNode {
 
 export interface ProjectionLambdaExpressionNode extends BaseNode {
   readonly kind: SyntaxKind.ProjectionLambdaExpression;
-  readonly parameters: ProjectionLambdaParameterDeclarationNode[];
+  readonly parameters: readonly ProjectionLambdaParameterDeclarationNode[];
   readonly locals?: SymbolTable;
   readonly body: ProjectionBlockExpressionNode;
 }
@@ -1422,10 +1422,11 @@ export interface ProjectionLambdaParameterDeclarationNode extends DeclarationNod
 
 export interface ProjectionNode extends BaseNode {
   readonly kind: SyntaxKind.Projection;
-  readonly direction: "to" | "from" | "preTo" | "preFrom" | "<error>";
+  readonly direction: "to" | "from" | "pre_to" | "pre_from" | "<error>";
   readonly directionId: IdentifierNode;
+  readonly modifierIds: readonly IdentifierNode[];
   readonly parameters: ProjectionParameterDeclarationNode[];
-  readonly body: ProjectionStatementItem[];
+  readonly body: readonly ProjectionStatementItem[];
   readonly locals?: SymbolTable;
 }
 
